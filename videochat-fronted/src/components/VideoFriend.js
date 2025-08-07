@@ -9,7 +9,13 @@ export default function VideoFriend({ remoteStream }) {
     if (videoRef.current) {
       if (remoteStream) {
         videoRef.current.srcObject = remoteStream;
-        console.log("🎬 VideoFriend got stream:", remoteStream); // ✅ הוספה חשובה
+        console.log("🎬 VideoFriend got stream:", remoteStream);
+
+        videoRef.current.onloadedmetadata = () => {
+          videoRef.current
+            .play()
+            .catch((err) => console.error("❌ Video play error:", err));
+        };
       } else {
         videoRef.current.srcObject = null;
         console.log("🧼 VideoFriend cleared stream");

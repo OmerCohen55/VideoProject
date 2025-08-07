@@ -1,95 +1,116 @@
 import { useEffect, useRef, useState } from "react";
+import VideoSelf from "./VideoSelf";
+import VideoFriend from "./VideoFriend";
 
-// Exports Home component, receiving email, name and id as props from the parent component
 export default function Home({ email, name, id }) {
   const [messages, setMessages] = useState([]);
   const [targetEmail, setTargetEmail] = useState("");
   const [onlineUsers, setOnlineUsers] = useState([]);
+  const ws = useRef(null);
   const [incomingCall, setIncomingCall] = useState(null);
   const [isInCall, setIsInCall] = useState(false);
-  const ws = useRef(null);
+  const [remoteStream, setRemoteStream] = useState(null);
+  const localStream = useRef(null);
   const peerConnection = useRef(null);
-  const remoteVideoRef = useRef(null);
-  const localStreamRef = useRef(null);
+  const [currentCallId, setCurrentCallId] = useState(null);
+  const pendingCandidates = useRef([]); // חדש
+  const incomingOffer = useRef(null);
 
+  // שמירה על חיבור מול השרת כל 20 שניות
   useEffect(() => {
     fetch(`http://localhost:8080/keepalive?id=${id}`, { method: "POST" });
+
     const interval = setInterval(() => {
       fetch(`http://localhost:8080/keepalive?id=${id}`, { method: "POST" });
     }, 20000);
+
     return () => clearInterval(interval);
   }, []);
 
+  // התחברות ל־WebSocket
   useEffect(() => {
     ws.current = new WebSocket(`ws://localhost:8080/ws?email=${email}`);
 
     ws.current.onmessage = async (event) => {
       const data = JSON.parse(event.data);
       console.log("📩 WebSocket message:", data);
-      setMessages((prev) => [...prev, data]);
+
+      if (
+        data.type !== "webrtc_offer" &&
+        data.type !== "webrtc_answer" &&
+        data.type !== "webrtc_ice_candidate"
+      ) {
+        setMessages((prev) => [...prev, data]);
+      }
 
       if (data.type === "incoming_call") {
         console.log("📞 Incoming call from", data.from);
         setIncomingCall({ from: data.from, callId: data.call_id });
       }
+
       if (data.type === "call_accepted") {
         alert(`✅ Your call was accepted by ${data.by}`);
+        setIsInCall(true);
+
+        await startLocalStream(); // ⬅️ כאן
+        initiateConnection();
       }
+
       if (data.type === "call_rejected") {
         alert(`❌ Your call was rejected by ${data.by}`);
+
+        // נקה את כל מה שנשאר פתוח אצל היוזם
+        peerConnection.current?.close();
+        peerConnection.current = null;
+        localStream.current?.getTracks().forEach((track) => track.stop());
+        setRemoteStream(null);
+        setIsInCall(false);
+        setCurrentCallId(null);
       }
+
       if (data.type === "call_ended") {
         alert("📴 Call has ended");
+        peerConnection.current?.close();
+        peerConnection.current = null;
+        setRemoteStream(null);
         setIsInCall(false);
+        setIncomingCall(null);
       }
 
-      if (data.type === "offer") {
-        console.log("📨 Received offer");
+      if (data.type === "webrtc_offer") {
+        incomingOffer.current = data;
+      }
 
-        if (!peerConnection.current) {
-          peerConnection.current = createPeerConnection();
-          console.log("🎙️ Added local track to connection (on offer)");
-          localStreamRef.current.getTracks().forEach((track) => {
-            peerConnection.current.addTrack(track, localStreamRef.current);
-          });
-        }
-
-        await peerConnection.current
-          .setRemoteDescription(new RTCSessionDescription(data.offer))
-          .catch((err) =>
-            console.error("❌ Failed to set remote description (offer):", err)
-          );
-
-        const answer = await peerConnection.current.createAnswer();
-        await peerConnection.current.setLocalDescription(answer);
-
-        console.log("📤 Sending answer to", data.from);
-        ws.current.send(
-          JSON.stringify({
-            type: "answer",
-            answer: answer,
-            to: data.from,
-          })
+      if (data.type === "webrtc_answer") {
+        console.log("📡 Received answer:", data.answer);
+        peerConnection.current.setRemoteDescription(
+          new RTCSessionDescription(data.answer)
         );
+        pendingCandidates.current.forEach((candidate) => {
+          peerConnection.current
+            .addIceCandidate(candidate)
+            .catch((err) => console.error("❌ Failed to add saved ICE:", err));
+        });
+        pendingCandidates.current = [];
       }
 
-      if (data.type === "answer") {
-        console.log("📨 Received answer");
-        await peerConnection.current
-          .setRemoteDescription(new RTCSessionDescription(data.answer))
-          .catch((err) =>
-            console.error("❌ Failed to set remote description (answer):", err)
-          );
-      }
+      if (data.type === "webrtc_ice_candidate" && data.candidate) {
+        console.log("❄️ Received ICE candidate:", data.candidate);
+        const candidate = new RTCIceCandidate(data.candidate);
 
-      if (data.type === "ice_candidate") {
-        console.log("🧊 Received ICE candidate:", data.candidate);
-        if (peerConnection.current) {
-          await peerConnection.current
-            .addIceCandidate(data.candidate)
+        if (
+          peerConnection.current &&
+          peerConnection.current.remoteDescription &&
+          peerConnection.current.remoteDescription.type
+        ) {
+          peerConnection.current
+            .addIceCandidate(candidate)
             .catch((err) =>
               console.error("❌ Failed to add ICE candidate:", err)
             );
+        } else {
+          console.log("💤 ICE candidate arrived early, saving...");
+          pendingCandidates.current.push(candidate);
         }
       }
     };
@@ -98,41 +119,58 @@ export default function Home({ email, name, id }) {
       console.log("WebSocket closed");
     };
 
-    return () => ws.current.close();
+    return () => {
+      ws.current.close();
+    };
   }, []);
 
+  // טעינת משתמשים מחוברים
   useEffect(() => {
     const fetchOnlineUsers = async () => {
       const res = await fetch("http://localhost:8080/online");
       const data = await res.json();
       setOnlineUsers(data);
     };
+
     fetchOnlineUsers();
     const interval = setInterval(fetchOnlineUsers, 5000);
+
     return () => clearInterval(interval);
   }, []);
 
+  // קבלת הווידאו מהמיקרופון והמצלמה
+  // useEffect(() => {
+  //   navigator.mediaDevices
+  //     .getUserMedia({ video: true, audio: true })
+  //     .then((stream) => {
+  //       localStream.current = stream;
+
+  //       const video = document.getElementById("my-video");
+  //       if (video) {
+  //         video.srcObject = stream;
+  //       }
+  //     });
+  // }, []);
+
+  const startLocalStream = async () => {
+    try {
+      const stream = await navigator.mediaDevices.getUserMedia({
+        video: true,
+        audio: true,
+      });
+
+      localStream.current = stream;
+
+      const video = document.getElementById("my-video");
+      if (video) {
+        video.srcObject = stream;
+      }
+    } catch (err) {
+      console.error("🎥 Failed to get local stream:", err);
+    }
+  };
+
   const handleCall = async () => {
-    peerConnection.current = createPeerConnection();
-
-    localStreamRef.current.getTracks().forEach((track) => {
-      peerConnection.current.addTrack(track, localStreamRef.current);
-      console.log("🎙️ Added local track to connection (handleCall)");
-    });
-
-    const offer = await peerConnection.current.createOffer();
-    await peerConnection.current.setLocalDescription(offer);
-
-    console.log("📤 Sending offer to", targetEmail);
-    ws.current.send(
-      JSON.stringify({
-        type: "offer",
-        offer: offer,
-        to: targetEmail,
-        from: email,
-      })
-    );
-
     const res = await fetch("http://localhost:8080/call", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
@@ -143,18 +181,19 @@ export default function Home({ email, name, id }) {
     });
 
     if (res.ok) {
-      alert("Call request sent");
+      const data = await res.json();
+      setCurrentCallId(data.call_id);
+      setIsInCall(true);
+
+      await startLocalStream(); // ✅ הוסף את זה לפני ההתחברות
+      initiateConnection();
     } else {
       alert("Call failed");
     }
   };
 
   const handleAccept = async () => {
-    peerConnection.current = createPeerConnection();
-    localStreamRef.current.getTracks().forEach((track) => {
-      peerConnection.current.addTrack(track, localStreamRef.current);
-      console.log("🎙️ Added local track to connection (handleAccept)");
-    });
+    if (!incomingCall) return;
 
     const res = await fetch("http://localhost:8080/accept", {
       method: "POST",
@@ -163,15 +202,20 @@ export default function Home({ email, name, id }) {
     });
 
     if (res.ok) {
+      setCurrentCallId(incomingCall.callId);
       alert("✅ You accepted the call");
       setIncomingCall(null);
       setIsInCall(true);
-    } else {
-      alert("❌ Failed to accept call");
+
+      await startLocalStream(); // ⬅️ הפעל מצלמה
+
+      await handleReceivedOffer(incomingOffer.current); // ⬅️ עכשיו מותר להפעיל את ההצעה
     }
   };
 
   const handleReject = async () => {
+    if (!incomingCall) return;
+
     const res = await fetch("http://localhost:8080/reject", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
@@ -180,78 +224,151 @@ export default function Home({ email, name, id }) {
 
     if (res.ok) {
       alert("🚫 You rejected the call");
+
+      // ✅ נקה את כל מה שצריך כדי לא להראות End Call
       setIncomingCall(null);
+      setRemoteStream(null); // 👈 מוסיף ניקוי וידאו
+      setIsInCall(false); // 👈 מוודא שלא נראה כאילו אתה בשיחה
+      setCurrentCallId(null);
+      peerConnection.current?.close();
+      peerConnection.current = null;
     } else {
       alert("❌ Failed to reject call");
     }
   };
 
-  useEffect(() => {
-    navigator.mediaDevices
-      .getUserMedia({ video: true, audio: true })
-      .then((stream) => {
-        localStreamRef.current = stream;
-        console.log("🎦 Got local media stream");
+  const endCall = async () => {
+    console.log("📴 Ending call with ID:", currentCallId);
 
-        const videoElement = document.getElementById("my-video");
-        if (videoElement) {
-          videoElement.srcObject = stream;
-          videoElement.play();
-        }
+    // שלח לשרת לסיים במסד
+    await fetch("http://localhost:8080/end", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ call_id: currentCallId }),
+    });
 
-        if (peerConnection.current) {
-          stream.getTracks().forEach((track) => {
-            peerConnection.current.addTrack(track, stream);
-            console.log("🎙️ Added local track to existing connection (camera)");
-          });
-        }
+    // שלח לצד השני שצריך לסיים
+    ws.current.send(
+      JSON.stringify({
+        type: "call_ended",
       })
-      .catch((err) => {
-        console.error("Failed to access camera:", err);
-      });
-  }, []);
+    );
 
-  function createPeerConnection() {
-    const pc = new RTCPeerConnection({
+    // נקה את הצד שלך
+    peerConnection.current?.close();
+    peerConnection.current = null;
+    setRemoteStream(null);
+    setIsInCall(false);
+    setIncomingCall(null);
+    setCurrentCallId(null);
+  };
+
+  const initiateConnection = () => {
+    peerConnection.current = new RTCPeerConnection({
       iceServers: [{ urls: "stun:stun.l.google.com:19302" }],
     });
 
-    pc.ontrack = (event) => {
-      console.log("🎥 Remote stream received");
-      if (remoteVideoRef.current) {
-        remoteVideoRef.current.srcObject = event.streams[0];
-        remoteVideoRef.current.onloadedmetadata = () => {
-          remoteVideoRef.current
-            .play()
-            .catch((e) => console.error("🔴 Failed to play remote video:", e));
-        };
-      }
+    localStream.current.getTracks().forEach((track) => {
+      peerConnection.current.addTrack(track, localStream.current);
+    });
+
+    peerConnection.current.ontrack = (event) => {
+      const incomingStream = event.streams[0];
+      setRemoteStream(incomingStream);
     };
 
-    pc.onicecandidate = (event) => {
+    peerConnection.current.onicecandidate = (event) => {
       if (event.candidate) {
-        console.log(
-          "📤 Sending ICE candidate to",
-          isInCall ? targetEmail : incomingCall?.from
-        );
+        const recipient = targetEmail || incomingCall?.from;
+        console.log("📤 Sending ICE candidate", event.candidate);
         ws.current.send(
           JSON.stringify({
-            type: "ice_candidate",
+            type: "webrtc_ice_candidate",
+            to: recipient,
+            from: email,
             candidate: event.candidate,
-            to: isInCall ? targetEmail : incomingCall?.from,
           })
         );
-      } else {
-        console.log("🚫 No more ICE candidates");
       }
     };
 
-    return pc;
-  }
+    peerConnection.current
+      .createOffer()
+      .then((offer) => {
+        return peerConnection.current.setLocalDescription(offer);
+      })
+      .then(() => {
+        const offerMessage = {
+          type: "webrtc_offer",
+          to: targetEmail,
+          from: email,
+          offer: peerConnection.current.localDescription,
+        };
+        ws.current.send(JSON.stringify(offerMessage));
+      });
+  };
+
+  const handleReceivedOffer = async (data) => {
+    console.log("📡 Received offer:", data.offer);
+
+    await startLocalStream(); // ✅ זה חובה עכשיו
+
+    peerConnection.current = new RTCPeerConnection({
+      iceServers: [{ urls: "stun:stun.l.google.com:19302" }],
+    });
+
+    peerConnection.current.onicecandidate = (event) => {
+      if (event.candidate) {
+        const recipient = data.from || incomingCall?.from || targetEmail;
+        console.log("📤 Sending ICE candidate", event.candidate);
+        ws.current.send(
+          JSON.stringify({
+            type: "webrtc_ice_candidate",
+            to: recipient,
+            from: email,
+            candidate: event.candidate,
+          })
+        );
+      }
+    };
+
+    peerConnection.current.ontrack = (event) => {
+      setRemoteStream(event.streams[0]);
+    };
+
+    localStream.current.getTracks().forEach((track) => {
+      peerConnection.current.addTrack(track, localStream.current);
+    });
+
+    await peerConnection.current.setRemoteDescription(
+      new RTCSessionDescription(data.offer)
+    );
+
+    // עיבוד כל המועמדים שהגיעו מוקדם מדי
+    pendingCandidates.current.forEach((candidate) => {
+      peerConnection.current
+        .addIceCandidate(candidate)
+        .catch((err) => console.error("❌ Failed to add saved ICE:", err));
+    });
+    pendingCandidates.current = [];
+
+    const answer = await peerConnection.current.createAnswer();
+    await peerConnection.current.setLocalDescription(answer);
+
+    const answerMessage = {
+      type: "webrtc_answer",
+      to: data.from,
+      from: email,
+      answer: peerConnection.current.localDescription,
+    };
+
+    ws.current.send(JSON.stringify(answerMessage));
+  };
 
   return (
     <div>
       <h2>Welcome, {name}</h2>
+
       <div>
         <input
           type="email"
@@ -261,6 +378,7 @@ export default function Home({ email, name, id }) {
         />
         <button onClick={handleCall}>Call</button>
       </div>
+
       <div>
         <h3>Online Users:</h3>
         <ul>
@@ -269,6 +387,7 @@ export default function Home({ email, name, id }) {
           ))}
         </ul>
       </div>
+
       <div>
         <h3>Messages:</h3>
         <ul>
@@ -277,6 +396,7 @@ export default function Home({ email, name, id }) {
           ))}
         </ul>
       </div>
+
       {incomingCall && (
         <div
           style={{ border: "1px solid black", padding: "10px", margin: "10px" }}
@@ -288,24 +408,17 @@ export default function Home({ email, name, id }) {
           <button onClick={handleReject}>Reject</button>
         </div>
       )}
-      <div>
-        <video
-          id="my-video"
-          autoPlay
-          muted
-          style={{ width: "300px", border: "1px solid gray" }}
-        />
-        <video
-          ref={remoteVideoRef}
-          autoPlay
-          playsInline
-          style={{
-            width: "300px",
-            border: "1px solid blue",
-            marginTop: "10px",
-          }}
-        />
-      </div>
+
+      {isInCall && remoteStream && (
+        <button
+          onClick={endCall}
+          style={{ backgroundColor: "red", color: "white" }}
+        >
+          End Call
+        </button>
+      )}
+      {isInCall && <VideoSelf stream={localStream.current} />}
+      {isInCall && <VideoFriend remoteStream={remoteStream} />}
     </div>
   );
 }

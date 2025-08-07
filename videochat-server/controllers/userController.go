@@ -128,7 +128,10 @@ func StartCall(c *gin.Context) {
 	}
 
 	// Responds to the client with 200 OK and a confirmation message that the call was initiated
-	c.JSON(http.StatusOK, gin.H{"message": "Call initiated"})
+	c.JSON(http.StatusOK, gin.H{
+		"message": "Call initiated",
+		"call_id": call.ID, // ⬅️ זה מה שחסר!
+	})
 }
 
 // Handles accepting a call when a POST /accept request is received
