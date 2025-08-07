@@ -185,7 +185,15 @@ export default function Home({ email, name, id }) {
       setCurrentCallId(data.call_id);
       setIsInCall(true);
 
-      await startLocalStream(); // ✅ הוסף את זה לפני ההתחברות
+      await startLocalStream();
+
+      // ✅ המתנה קצרה לוודא שה־stream נטען לפני החיבור
+      const tracks = localStream.current?.getTracks() || [];
+      if (tracks.length === 0) {
+        console.warn("⛔ Local tracks not ready, waiting...");
+        await new Promise((resolve) => setTimeout(resolve, 300));
+      }
+
       initiateConnection();
     } else {
       alert("Call failed");
@@ -264,19 +272,42 @@ export default function Home({ email, name, id }) {
   };
 
   const initiateConnection = () => {
+    if (peerConnection.current) {
+      console.warn("🛑 peerConnection already exists, skipping re-init");
+      return;
+    }
+
+    // 🛡 בדיקה קריטית: האם ה־stream קיים ומוכן?
+    if (!localStream.current || localStream.current.getTracks().length === 0) {
+      console.error(
+        "⛔ Cannot initiate connection: local stream is missing or empty"
+      );
+      return;
+    }
+
+    console.log("📡 Sending local tracks:", localStream.current.getTracks());
+
+    // יצירת החיבור
     peerConnection.current = new RTCPeerConnection({
       iceServers: [{ urls: "stun:stun.l.google.com:19302" }],
     });
 
-    localStream.current.getTracks().forEach((track) => {
-      peerConnection.current.addTrack(track, localStream.current);
-    });
+    if (!localStream.current || localStream.current.getTracks().length === 0) {
+      console.warn("🛑 No local stream available, skipping addTrack");
+    } else {
+      localStream.current.getTracks().forEach((track) => {
+        peerConnection.current.addTrack(track, localStream.current);
+      });
+    }
 
+    // קבלת stream מהצד השני
     peerConnection.current.ontrack = (event) => {
+      console.log("🎥 Got remote track!", event.streams);
       const incomingStream = event.streams[0];
       setRemoteStream(incomingStream);
     };
 
+    // שליחת מועמדי ICE
     peerConnection.current.onicecandidate = (event) => {
       if (event.candidate) {
         const recipient = targetEmail || incomingCall?.from;
@@ -292,6 +323,7 @@ export default function Home({ email, name, id }) {
       }
     };
 
+    // יצירת OFFER ושליחתו
     peerConnection.current
       .createOffer()
       .then((offer) => {
@@ -311,7 +343,13 @@ export default function Home({ email, name, id }) {
   const handleReceivedOffer = async (data) => {
     console.log("📡 Received offer:", data.offer);
 
-    await startLocalStream(); // ✅ זה חובה עכשיו
+    await startLocalStream();
+
+    // 🛡️ הגנה: אם כבר יש peerConnection, לא נמשיך
+    if (peerConnection.current) {
+      console.warn("🛑 peerConnection already exists, skipping re-init");
+      return;
+    }
 
     peerConnection.current = new RTCPeerConnection({
       iceServers: [{ urls: "stun:stun.l.google.com:19302" }],
@@ -333,18 +371,28 @@ export default function Home({ email, name, id }) {
     };
 
     peerConnection.current.ontrack = (event) => {
+      console.log("🎥 Got remote track!", event.streams);
       setRemoteStream(event.streams[0]);
     };
 
+    // ✅ בדיקה שה־stream מוכן באמת
+    const tracks = localStream.current?.getTracks() || [];
+    if (tracks.length === 0) {
+      console.warn("⛔ No local tracks available, delaying addTrack...");
+      await new Promise((resolve) => setTimeout(resolve, 300)); // השהייה קטנה
+    }
+
+    // ✅ הוספת ה־tracks המקומיים
     localStream.current.getTracks().forEach((track) => {
       peerConnection.current.addTrack(track, localStream.current);
     });
 
+    // ✅ קביעת התיאור מהצד השני
     await peerConnection.current.setRemoteDescription(
       new RTCSessionDescription(data.offer)
     );
 
-    // עיבוד כל המועמדים שהגיעו מוקדם מדי
+    // ✅ עיבוד מועמדים מוקדמים
     pendingCandidates.current.forEach((candidate) => {
       peerConnection.current
         .addIceCandidate(candidate)
@@ -352,6 +400,7 @@ export default function Home({ email, name, id }) {
     });
     pendingCandidates.current = [];
 
+    // ✅ יצירת תשובה ושליחתה
     const answer = await peerConnection.current.createAnswer();
     await peerConnection.current.setLocalDescription(answer);
 
@@ -409,7 +458,7 @@ export default function Home({ email, name, id }) {
         </div>
       )}
 
-      {isInCall && remoteStream && (
+      {isInCall && (
         <button
           onClick={endCall}
           style={{ backgroundColor: "red", color: "white" }}
@@ -417,6 +466,7 @@ export default function Home({ email, name, id }) {
           End Call
         </button>
       )}
+
       {isInCall && <VideoSelf stream={localStream.current} />}
       {isInCall && <VideoFriend remoteStream={remoteStream} />}
     </div>

@@ -4,22 +4,23 @@ export default function VideoFriend({ remoteStream }) {
   const videoRef = useRef(null);
 
   useEffect(() => {
-    console.log("🧩 remoteStream updated", remoteStream);
+    const video = videoRef.current;
+    if (!video) return;
 
-    if (videoRef.current) {
-      if (remoteStream) {
-        videoRef.current.srcObject = remoteStream;
-        console.log("🎬 VideoFriend got stream:", remoteStream);
+    if (remoteStream) {
+      video.srcObject = remoteStream;
+      console.log("🎬 VideoFriend got stream:", remoteStream);
 
-        videoRef.current.onloadedmetadata = () => {
-          videoRef.current
-            .play()
-            .catch((err) => console.error("❌ Video play error:", err));
-        };
-      } else {
-        videoRef.current.srcObject = null;
-        console.log("🧼 VideoFriend cleared stream");
-      }
+      const handleLoadedMetadata = () => {
+        video.play().catch((err) => {
+          console.error("❌ Video play error:", err);
+        });
+      };
+
+      video.addEventListener("loadedmetadata", handleLoadedMetadata);
+      return () => {
+        video.removeEventListener("loadedmetadata", handleLoadedMetadata);
+      };
     }
   }, [remoteStream]);
 
