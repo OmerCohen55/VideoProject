@@ -1,11 +1,15 @@
-import { useEffect, useRef } from "react";
+import { useRef, useEffect } from "react";
 
 export default function VideoSelf({ stream }) {
   const videoRef = useRef(null);
 
   useEffect(() => {
-    if (videoRef.current && stream) {
+    if (!videoRef.current) return;
+    if (stream) {
       videoRef.current.srcObject = stream;
+    } else {
+      // חשוב: מנתק את הזרם מהווידאו, סוגר את האייקון בדפדפן
+      videoRef.current.srcObject = null;
     }
   }, [stream]);
 
@@ -17,7 +21,7 @@ export default function VideoSelf({ stream }) {
         autoPlay
         playsInline
         muted
-        style={{ width: "300px", height: "225px", border: "2px solid white" }}
+        style={{ width: 300, height: 225, border: "2px solid white" }}
       />
     </div>
   );

@@ -15,13 +15,44 @@ export default function Home({ email, name, id }) {
   const [currentCallId, setCurrentCallId] = useState(null);
   const pendingCandidates = useRef([]); // חדש
   const incomingOffer = useRef(null);
+  const [hasOffer, setHasOffer] = useState(false);
+  const [errorMsg, setErrorMsg] = useState("");
+  const [isDialing, setIsDialing] = useState(false);
+
+  const showError = (msg) => {
+    console.error(msg);
+    setErrorMsg(msg);
+    setTimeout(() => setErrorMsg(""), 10000); // נעל אחרי 5 שניות
+  };
+
+  // fetch עם timeout בסיסי
+  const fetchWithTimeout = async (url, options = {}, timeoutMs = 8000) => {
+    const ctrl = new AbortController();
+    const id = setTimeout(() => ctrl.abort(), timeoutMs);
+    try {
+      const res = await fetch(url, { ...options, signal: ctrl.signal });
+      clearTimeout(id);
+      if (!res.ok) {
+        const text = await res.text().catch(() => "");
+        throw new Error(`HTTP ${res.status} – ${text || url}`);
+      }
+      return res;
+    } catch (e) {
+      clearTimeout(id);
+      throw e;
+    }
+  };
 
   // שמירה על חיבור מול השרת כל 20 שניות
   useEffect(() => {
-    fetch(`http://localhost:8080/keepalive?id=${id}`, { method: "POST" });
+    fetchWithTimeout(`http://localhost:8080/keepalive?id=${id}`, {
+      method: "POST",
+    });
 
     const interval = setInterval(() => {
-      fetch(`http://localhost:8080/keepalive?id=${id}`, { method: "POST" });
+      fetchWithTimeout(`http://localhost:8080/keepalive?id=${id}`, {
+        method: "POST",
+      });
     }, 20000);
 
     return () => clearInterval(interval);
@@ -44,6 +75,24 @@ export default function Home({ email, name, id }) {
       }
 
       if (data.type === "incoming_call") {
+        // אם כבר בשיחה או מחייג — דחה אוטומטית
+        if (isInCall || isDialing) {
+          try {
+            await fetchWithTimeout(
+              "http://localhost:8080/reject",
+              {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({ call_id: data.call_id }),
+              },
+              8000
+            );
+          } catch (_) {}
+          // אפשר גם להראות הודעה קטנה:
+          showError(`שיחה נכנסת מ-${data.from} נדחתה: אתה כבר בשיחה.`);
+          return; // לא נפתח מודאל קבלה
+        }
+
         console.log("📞 Incoming call from", data.from);
         setIncomingCall({ from: data.from, callId: data.call_id });
       }
@@ -51,9 +100,9 @@ export default function Home({ email, name, id }) {
       if (data.type === "call_accepted") {
         alert(`✅ Your call was accepted by ${data.by}`);
         setIsInCall(true);
-
-        await startLocalStream(); // ⬅️ כאן
-        initiateConnection();
+        setIsDialing(false);
+        // await startLocalStream(); // ⬅️ כאן
+        // initiateConnection();
       }
 
       if (data.type === "call_rejected") {
@@ -62,35 +111,51 @@ export default function Home({ email, name, id }) {
         // נקה את כל מה שנשאר פתוח אצל היוזם
         peerConnection.current?.close();
         peerConnection.current = null;
-        localStream.current?.getTracks().forEach((track) => track.stop());
+        setIsDialing(false);
         setRemoteStream(null);
         setIsInCall(false);
         setCurrentCallId(null);
+        stopLocalMedia();
       }
 
       if (data.type === "call_ended") {
         alert("📴 Call has ended");
         peerConnection.current?.close();
         peerConnection.current = null;
+        stopLocalMedia();
         setRemoteStream(null);
         setIsInCall(false);
         setIncomingCall(null);
+        setCurrentCallId(null); // ← חסר כרגע
+        pendingCandidates.current = [];
+        setIsDialing(false);
+        incomingOffer.current = null;
+        setHasOffer(false);
       }
 
       if (data.type === "webrtc_offer") {
+        // קבל רק אם יש שיחה נכנסת תואמת או לא עסוקים
+        if (
+          (incomingCall && incomingCall.from !== data.from) ||
+          isInCall ||
+          isDialing
+        ) {
+          console.log("⚠️ Ignoring stray/late offer from", data.from);
+          return;
+        }
         incomingOffer.current = data;
+        setHasOffer(true);
       }
 
       if (data.type === "webrtc_answer") {
-        console.log("📡 Received answer:", data.answer);
-        peerConnection.current.setRemoteDescription(
+        await peerConnection.current.setRemoteDescription(
           new RTCSessionDescription(data.answer)
         );
-        pendingCandidates.current.forEach((candidate) => {
-          peerConnection.current
-            .addIceCandidate(candidate)
+        for (const c of pendingCandidates.current) {
+          await peerConnection.current
+            .addIceCandidate(c)
             .catch((err) => console.error("❌ Failed to add saved ICE:", err));
-        });
+        }
         pendingCandidates.current = [];
       }
 
@@ -127,7 +192,7 @@ export default function Home({ email, name, id }) {
   // טעינת משתמשים מחוברים
   useEffect(() => {
     const fetchOnlineUsers = async () => {
-      const res = await fetch("http://localhost:8080/online");
+      const res = await fetchWithTimeout("http://localhost:8080/online");
       const data = await res.json();
       setOnlineUsers(data);
     };
@@ -154,77 +219,103 @@ export default function Home({ email, name, id }) {
 
   const startLocalStream = async () => {
     try {
+      // קודם סוגרים אם יש ישן
+      if (localStream.current) {
+        localStream.current.getTracks().forEach((t) => t.stop());
+        localStream.current = null;
+      }
       const stream = await navigator.mediaDevices.getUserMedia({
         video: true,
         audio: true,
       });
 
       localStream.current = stream;
-
-      const video = document.getElementById("my-video");
-      if (video) {
-        video.srcObject = stream;
-      }
     } catch (err) {
-      console.error("🎥 Failed to get local stream:", err);
+      // הודעות ידידותיות
+      if (err?.name === "NotAllowedError") {
+        showError("נחסמה גישה למצלמה/מיקרופון. אפשר הרשאות ונסה שוב.");
+      } else if (err?.name === "NotFoundError") {
+        showError("לא נמצאה מצלמה או מיקרופון במכשיר.");
+      } else if (err?.name === "NotReadableError") {
+        showError(
+          "התקן תפוס ע״י אפליקציה אחרת. סגור אפליקציות מצלמה/זום ונסה שוב."
+        );
+      } else if (err?.name === "OverconstrainedError") {
+        showError("הגדרות המצלמה/מיקרופון אינן נתמכות. נסה הגדרות אחרות.");
+      } else {
+        showError("שגיאה בהפעלת מצלמה/מיקרופון.");
+      }
+      throw err;
     }
   };
 
   const handleCall = async () => {
-    const res = await fetch("http://localhost:8080/call", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        caller_email: email,
-        receiver_email: targetEmail,
-      }),
-    });
+    if (targetEmail === email) {
+      showError("אי אפשר להתקשר לעצמך");
+      return;
+    }
+    // בדיקה שהמשתמש מחובר
+    if (!onlineUsers.some((user) => user.email === targetEmail)) {
+      showError(`המשתמש ${targetEmail} אינו מחובר כרגע`);
+      return;
+    }
+    try {
+      const res = await fetchWithTimeout(
+        "http://localhost:8080/call",
+        {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            caller_email: email,
+            receiver_email: targetEmail,
+          }),
+        },
+        10000
+      );
 
-    if (res.ok) {
       const data = await res.json();
       setCurrentCallId(data.call_id);
       setIsInCall(true);
 
       await startLocalStream();
-
-      // ✅ המתנה קצרה לוודא שה־stream נטען לפני החיבור
       const tracks = localStream.current?.getTracks() || [];
-      if (tracks.length === 0) {
-        console.warn("⛔ Local tracks not ready, waiting...");
-        await new Promise((resolve) => setTimeout(resolve, 300));
-      }
-
+      if (tracks.length === 0) await new Promise((r) => setTimeout(r, 300));
+      setIsDialing(true);
       initiateConnection();
-    } else {
-      alert("Call failed");
+    } catch (e) {
+      showError("שגיאה ביצירת שיחה. בדוק חיבור או נסה שוב מאוחר יותר.");
     }
   };
 
   const handleAccept = async () => {
     if (!incomingCall) return;
+    try {
+      const res = await fetchWithTimeout(
+        "http://localhost:8080/accept",
+        {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ call_id: incomingCall.callId }),
+        },
+        10000
+      );
 
-    const res = await fetch("http://localhost:8080/accept", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ call_id: incomingCall.callId }),
-    });
-
-    if (res.ok) {
       setCurrentCallId(incomingCall.callId);
       alert("✅ You accepted the call");
       setIncomingCall(null);
       setIsInCall(true);
 
-      await startLocalStream(); // ⬅️ הפעל מצלמה
-
-      await handleReceivedOffer(incomingOffer.current); // ⬅️ עכשיו מותר להפעיל את ההצעה
+      await startLocalStream();
+      await handleReceivedOffer(incomingOffer.current);
+    } catch (e) {
+      showError("שגיאה בקבלת השיחה. נסה שוב.");
     }
   };
 
   const handleReject = async () => {
     if (!incomingCall) return;
 
-    const res = await fetch("http://localhost:8080/reject", {
+    const res = await fetchWithTimeout("http://localhost:8080/reject", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ call_id: incomingCall.callId }),
@@ -240,6 +331,11 @@ export default function Home({ email, name, id }) {
       setCurrentCallId(null);
       peerConnection.current?.close();
       peerConnection.current = null;
+
+      incomingOffer.current = null;
+      setHasOffer(false);
+      stopLocalMedia();
+      pendingCandidates.current = [];
     } else {
       alert("❌ Failed to reject call");
     }
@@ -249,29 +345,31 @@ export default function Home({ email, name, id }) {
     console.log("📴 Ending call with ID:", currentCallId);
 
     // שלח לשרת לסיים במסד
-    await fetch("http://localhost:8080/end", {
+    await fetchWithTimeout("http://localhost:8080/end", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ call_id: currentCallId }),
     });
 
     // שלח לצד השני שצריך לסיים
-    ws.current.send(
-      JSON.stringify({
-        type: "call_ended",
-      })
-    );
+    // ws.current.send(
+    //   JSON.stringify({
+    //     type: "call_ended",
+    //   })
+    // );
 
     // נקה את הצד שלך
     peerConnection.current?.close();
     peerConnection.current = null;
+    stopLocalMedia();
     setRemoteStream(null);
     setIsInCall(false);
     setIncomingCall(null);
     setCurrentCallId(null);
+    pendingCandidates.current = [];
   };
 
-  const initiateConnection = () => {
+  const initiateConnection = async () => {
     if (peerConnection.current) {
       console.warn("🛑 peerConnection already exists, skipping re-init");
       return;
@@ -292,9 +390,14 @@ export default function Home({ email, name, id }) {
       iceServers: [{ urls: "stun:stun.l.google.com:19302" }],
     });
 
-    if (!localStream.current || localStream.current.getTracks().length === 0) {
-      console.warn("🛑 No local stream available, skipping addTrack");
-    } else {
+    peerConnection.current.onconnectionstatechange = () => {
+      const st = peerConnection.current?.connectionState;
+      if (st === "failed" || st === "disconnected" || st === "closed") {
+        cleanupConnection();
+      }
+    };
+
+    if (localStream.current?.getTracks().length > 0) {
       localStream.current.getTracks().forEach((track) => {
         peerConnection.current.addTrack(track, localStream.current);
       });
@@ -303,8 +406,7 @@ export default function Home({ email, name, id }) {
     // קבלת stream מהצד השני
     peerConnection.current.ontrack = (event) => {
       console.log("🎥 Got remote track!", event.streams);
-      const incomingStream = event.streams[0];
-      setRemoteStream(incomingStream);
+      setRemoteStream(event.streams[0]);
     };
 
     // שליחת מועמדי ICE
@@ -323,21 +425,24 @@ export default function Home({ email, name, id }) {
       }
     };
 
-    // יצירת OFFER ושליחתו
-    peerConnection.current
-      .createOffer()
-      .then((offer) => {
-        return peerConnection.current.setLocalDescription(offer);
-      })
-      .then(() => {
-        const offerMessage = {
+    // יצירת OFFER ושליחתו עם טיפול בשגיאות
+    try {
+      const offer = await peerConnection.current.createOffer();
+      await peerConnection.current.setLocalDescription(offer);
+
+      ws.current.send(
+        JSON.stringify({
           type: "webrtc_offer",
           to: targetEmail,
           from: email,
           offer: peerConnection.current.localDescription,
-        };
-        ws.current.send(JSON.stringify(offerMessage));
-      });
+        })
+      );
+    } catch (err) {
+      showError("שגיאה ביצירת חיבור. נסה שוב."); // ← זה החידוש
+      console.error("❌ Error creating/sending offer:", err);
+      cleanupConnection();
+    }
   };
 
   const handleReceivedOffer = async (data) => {
@@ -345,7 +450,6 @@ export default function Home({ email, name, id }) {
 
     await startLocalStream();
 
-    // 🛡️ הגנה: אם כבר יש peerConnection, לא נמשיך
     if (peerConnection.current) {
       console.warn("🛑 peerConnection already exists, skipping re-init");
       return;
@@ -354,6 +458,13 @@ export default function Home({ email, name, id }) {
     peerConnection.current = new RTCPeerConnection({
       iceServers: [{ urls: "stun:stun.l.google.com:19302" }],
     });
+
+    peerConnection.current.onconnectionstatechange = () => {
+      const st = peerConnection.current?.connectionState;
+      if (st === "failed" || st === "disconnected" || st === "closed") {
+        cleanupConnection();
+      }
+    };
 
     peerConnection.current.onicecandidate = (event) => {
       if (event.candidate) {
@@ -375,43 +486,63 @@ export default function Home({ email, name, id }) {
       setRemoteStream(event.streams[0]);
     };
 
-    // ✅ בדיקה שה־stream מוכן באמת
-    const tracks = localStream.current?.getTracks() || [];
-    if (tracks.length === 0) {
-      console.warn("⛔ No local tracks available, delaying addTrack...");
-      await new Promise((resolve) => setTimeout(resolve, 300)); // השהייה קטנה
+    if (localStream.current?.getTracks().length > 0) {
+      localStream.current.getTracks().forEach((track) => {
+        peerConnection.current.addTrack(track, localStream.current);
+      });
     }
 
-    // ✅ הוספת ה־tracks המקומיים
-    localStream.current.getTracks().forEach((track) => {
-      peerConnection.current.addTrack(track, localStream.current);
-    });
+    // קביעת תיאור מרוחק ויצירת תשובה עם טיפול בשגיאות
+    try {
+      await peerConnection.current.setRemoteDescription(
+        new RTCSessionDescription(data.offer)
+      );
 
-    // ✅ קביעת התיאור מהצד השני
-    await peerConnection.current.setRemoteDescription(
-      new RTCSessionDescription(data.offer)
-    );
+      // עיבוד מועמדים מוקדמים
+      for (const cand of pendingCandidates.current) {
+        await peerConnection.current.addIceCandidate(cand);
+      }
+      pendingCandidates.current = [];
 
-    // ✅ עיבוד מועמדים מוקדמים
-    pendingCandidates.current.forEach((candidate) => {
-      peerConnection.current
-        .addIceCandidate(candidate)
-        .catch((err) => console.error("❌ Failed to add saved ICE:", err));
-    });
+      const answer = await peerConnection.current.createAnswer();
+      await peerConnection.current.setLocalDescription(answer);
+
+      ws.current.send(
+        JSON.stringify({
+          type: "webrtc_answer",
+          to: data.from,
+          from: email,
+          answer: peerConnection.current.localDescription,
+        })
+      );
+
+      incomingOffer.current = null;
+      setHasOffer(false);
+    } catch (err) {
+      console.error("❌ Error handling received offer:", err);
+      cleanupConnection();
+    }
+  };
+
+  // פונקציית ניקוי כללית לשימוש חוזר
+  const cleanupConnection = () => {
+    peerConnection.current?.close();
+    peerConnection.current = null;
+    stopLocalMedia();
+    setRemoteStream(null);
+    setIsInCall(false);
+    setIncomingCall(null);
+    setCurrentCallId(null);
     pendingCandidates.current = [];
+    incomingOffer.current = null;
+    setHasOffer(false);
+  };
 
-    // ✅ יצירת תשובה ושליחתה
-    const answer = await peerConnection.current.createAnswer();
-    await peerConnection.current.setLocalDescription(answer);
-
-    const answerMessage = {
-      type: "webrtc_answer",
-      to: data.from,
-      from: email,
-      answer: peerConnection.current.localDescription,
-    };
-
-    ws.current.send(JSON.stringify(answerMessage));
+  const stopLocalMedia = () => {
+    if (localStream.current) {
+      localStream.current.getTracks().forEach((t) => t.stop());
+      localStream.current = null;
+    }
   };
 
   return (
@@ -425,7 +556,12 @@ export default function Home({ email, name, id }) {
           value={targetEmail}
           onChange={(e) => setTargetEmail(e.target.value)}
         />
-        <button onClick={handleCall}>Call</button>
+        <button
+          onClick={handleCall}
+          disabled={isDialing || isInCall || !targetEmail}
+        >
+          Call
+        </button>
       </div>
 
       <div>
@@ -436,6 +572,21 @@ export default function Home({ email, name, id }) {
           ))}
         </ul>
       </div>
+
+      {errorMsg && (
+        <div
+          style={{
+            background: "#fee2e2",
+            color: "#991b1b",
+            padding: "8px 12px",
+            border: "1px solid #fecaca",
+            borderRadius: 6,
+            marginBottom: 10,
+          }}
+        >
+          {errorMsg}
+        </div>
+      )}
 
       <div>
         <h3>Messages:</h3>
@@ -453,7 +604,9 @@ export default function Home({ email, name, id }) {
           <p>
             📞 Incoming call from <strong>{incomingCall.from}</strong>
           </p>
-          <button onClick={handleAccept}>Accept</button>
+          <button onClick={handleAccept} disabled={!hasOffer}>
+            Accept
+          </button>
           <button onClick={handleReject}>Reject</button>
         </div>
       )}
