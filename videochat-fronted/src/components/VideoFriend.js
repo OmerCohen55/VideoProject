@@ -1,4 +1,5 @@
 import { useRef, useEffect } from "react";
+import "../styles/home.css";
 
 export default function VideoFriend({ remoteStream }) {
   const videoRef = useRef(null);
@@ -26,17 +27,12 @@ export default function VideoFriend({ remoteStream }) {
 
   return (
     <div>
-      <h2>Friend's Camera</h2>
       <video
         ref={videoRef}
         autoPlay
         playsInline
         muted={false}
-        style={{
-          width: "300px",
-          height: "225px",
-          border: "2px solid lightblue",
-        }}
+        className="video-right"
       />
     </div>
   );

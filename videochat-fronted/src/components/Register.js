@@ -1,5 +1,7 @@
 // Imports useState from React to handle dynamic state updates
 import { useState } from "react";
+import "../styles/index.css";
+import regLogo from "../images/register-logo.jpg";
 
 // Defines the Register component, receiving goToLogin as a prop
 export default function Register({ goToLogin }) {
@@ -37,47 +39,61 @@ export default function Register({ goToLogin }) {
   };
 
   return (
-    <div>
-      <form onSubmit={handleSubmit}>
-        <div>
-          <label htmlFor="username">Enter Username</label>
-          <input
-            type="text"
-            id="username"
-            value={name}
-            onChange={(e) => setName(e.target.value)}
-            required
-          />
-        </div>
-        <div>
-          <label htmlFor="email">Enter Email</label>
-          <input
-            type="email"
-            id="email"
-            value={email}
-            onChange={(e) => setEmail(e.target.value)}
-            required
-          />
-        </div>
-        <div>
-          <label htmlFor="pass">Enter Password</label>
-          <input
-            type="password"
-            id="pass"
-            value={pass}
-            onChange={(e) => setPass(e.target.value)}
-            required
-          />
-        </div>
-        <div>
-          <button type="submit">Submit</button>
-        </div>
-        <div>
-          <button type="button" onClick={goToLogin}>
-            Already have an account? Login
-          </button>
-        </div>
-      </form>
+    <div className="location">
+      <div className="container-forms">
+        <img className="reg" src={regLogo} alt="reg-logo" />
+        <h1>Register</h1>
+        <form onSubmit={handleSubmit}>
+          <div className="div-form">
+            <label htmlFor="username">Enter Username</label>
+            <input
+              className="input-forms"
+              type="text"
+              id="username"
+              value={name}
+              onChange={(e) => setName(e.target.value)}
+              required
+            />
+          </div>
+          <div className="div-form">
+            <label htmlFor="email">Enter Email</label>
+            <input
+              className="input-forms"
+              type="email"
+              id="email"
+              value={email}
+              onChange={(e) => setEmail(e.target.value)}
+              required
+            />
+          </div>
+          <div className="div-form">
+            <label htmlFor="pass">Enter Password</label>
+            <input
+              className="input-forms"
+              type="password"
+              id="pass"
+              value={pass}
+              onChange={(e) => setPass(e.target.value)}
+              required
+            />
+          </div>
+          <div className="div-button">
+            <button className="button-forms" type="submit">
+              Submit
+            </button>
+          </div>
+
+          <div className="div-button">
+            <button
+              className="button-as-link"
+              type="button"
+              onClick={goToLogin}
+            >
+              Already have an account? Login
+            </button>
+          </div>
+        </form>
+      </div>
     </div>
   );
 }

@@ -1,6 +1,7 @@
 // Import useState from React to manage dynamic state in the component
 import { useState } from "react";
 // Import the components
+import FirstPage from "./components/FirstPage";
 import Login from "./components/Login";
 import Register from "./components/Register";
 import Home from "./components/Home";
@@ -8,7 +9,7 @@ import Home from "./components/Home";
 // Main App component that controls which screen to show
 function App() {
   // State to track which screen is currently shown ("login", "register", or "home")
-  const [screen, setScreen] = useState("login");
+  const [screen, setScreen] = useState("firstPage");
   // State to store the logged-in user's email, name and id
   const [email, setEmail] = useState("");
   const [name, setName] = useState("");
@@ -26,6 +27,13 @@ function App() {
 
   return (
     <div>
+      {screen === "firstPage" && (
+        <FirstPage
+          goToLogin={() => setScreen("login")}
+          goToRegister={() => setScreen("register")}
+        />
+      )}
+
       {screen === "login" && (
         <Login
           onLogin={handleLogin}

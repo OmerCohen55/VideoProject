@@ -1,5 +1,7 @@
 // Imports useState from React to handle dynamic state updates
 import { useState } from "react";
+import "../styles/index.css";
+import loginLogo from "../images/login-logo.png";
 
 // Exports Login component; receives onLogin and goToRegister functions as props
 export default function Login({ onLogin, goToRegister }) {
@@ -34,40 +36,52 @@ export default function Login({ onLogin, goToRegister }) {
 
   // Input field for email; updates 'email' state on change
   return (
-    <div>
-      <form onSubmit={handleSubmit}>
-        <div>
-          <label htmlFor="email">Enter Email</label>
-          <input
-            type="email"
-            id="email"
-            value={email}
-            onChange={(e) => setEmail(e.target.value)}
-            required
-          />
-        </div>
+    <div className="location">
+      <div className="container-forms">
+        <img className="login" src={loginLogo} alt="login-logo" />
+        <h1>Login</h1>
+        <form onSubmit={handleSubmit}>
+          <div className="div-form">
+            <label htmlFor="email">Enter Email</label>
+            <input
+              className="input-forms"
+              type="email"
+              id="email"
+              value={email}
+              onChange={(e) => setEmail(e.target.value)}
+              required
+            />
+          </div>
 
-        <div>
-          <label htmlFor="password">Enter Password</label>
-          <input
-            type="password"
-            id="password"
-            value={password}
-            onChange={(e) => setPassword(e.target.value)}
-            required
-          />
-        </div>
+          <div className="div-form">
+            <label htmlFor="password">Enter Password</label>
+            <input
+              className="input-forms"
+              type="password"
+              id="password"
+              value={password}
+              onChange={(e) => setPassword(e.target.value)}
+              required
+            />
+          </div>
 
-        <div>
-          <button type="submit">Login</button>
-        </div>
+          <div className="div-button">
+            <button className="button-forms" type="submit">
+              Login
+            </button>
+          </div>
 
-        <div>
-          <button type="button" onClick={goToRegister}>
-            Don't have an account? Register
-          </button>
-        </div>
-      </form>
+          <div className="div-button">
+            <button
+              className="button-as-link"
+              type="button"
+              onClick={goToRegister}
+            >
+              Don't have an account? Register
+            </button>
+          </div>
+        </form>
+      </div>
     </div>
   );
 }

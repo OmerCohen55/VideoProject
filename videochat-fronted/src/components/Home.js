@@ -1,9 +1,10 @@
 import { useEffect, useRef, useState } from "react";
 import VideoSelf from "./VideoSelf";
 import VideoFriend from "./VideoFriend";
+import "../styles/home.css";
 
 export default function Home({ email, name, id }) {
-  const [messages, setMessages] = useState([]);
+  const [messages, setMessages] = useState("");
   const [targetEmail, setTargetEmail] = useState("");
   const [onlineUsers, setOnlineUsers] = useState([]);
   const ws = useRef(null);
@@ -71,7 +72,7 @@ export default function Home({ email, name, id }) {
         data.type !== "webrtc_answer" &&
         data.type !== "webrtc_ice_candidate"
       ) {
-        setMessages((prev) => [...prev, data]);
+        setMessages("");
       }
 
       if (data.type === "incoming_call") {
@@ -98,7 +99,8 @@ export default function Home({ email, name, id }) {
       }
 
       if (data.type === "call_accepted") {
-        alert(`✅ Your call was accepted by ${data.by}`);
+        // alert(`✅ Your call was accepted by ${data.by}`);
+        setMessages(`✅ Your call was accepted by ${data.by}`);
         setIsInCall(true);
         setIsDialing(false);
         // await startLocalStream(); // ⬅️ כאן
@@ -106,8 +108,8 @@ export default function Home({ email, name, id }) {
       }
 
       if (data.type === "call_rejected") {
-        alert(`❌ Your call was rejected by ${data.by}`);
-
+        // alert(`❌ Your call was rejected by ${data.by}`);
+        setMessages(`❌ Your call was rejected by ${data.by}`);
         // נקה את כל מה שנשאר פתוח אצל היוזם
         peerConnection.current?.close();
         peerConnection.current = null;
@@ -119,7 +121,8 @@ export default function Home({ email, name, id }) {
       }
 
       if (data.type === "call_ended") {
-        alert("📴 Call has ended");
+        // alert("Call has ended");
+        setMessages("Call has ended");
         peerConnection.current?.close();
         peerConnection.current = null;
         stopLocalMedia();
@@ -131,6 +134,9 @@ export default function Home({ email, name, id }) {
         setIsDialing(false);
         incomingOffer.current = null;
         setHasOffer(false);
+        setTimeout(() => {
+          setMessages(null);
+        }, 10000);
       }
 
       if (data.type === "webrtc_offer") {
@@ -250,15 +256,12 @@ export default function Home({ email, name, id }) {
   };
 
   const handleCall = async () => {
-    if (targetEmail === email) {
-      showError("אי אפשר להתקשר לעצמך");
-      return;
-    }
     // בדיקה שהמשתמש מחובר
     if (!onlineUsers.some((user) => user.email === targetEmail)) {
       showError(`המשתמש ${targetEmail} אינו מחובר כרגע`);
       return;
     }
+    setMessages("📞 Dialering");
     try {
       const res = await fetchWithTimeout(
         "http://localhost:8080/call",
@@ -301,7 +304,8 @@ export default function Home({ email, name, id }) {
       );
 
       setCurrentCallId(incomingCall.callId);
-      alert("✅ You accepted the call");
+      // alert("✅ You accepted the call");
+      setMessages("✅ You accepted the call");
       setIncomingCall(null);
       setIsInCall(true);
 
@@ -322,7 +326,8 @@ export default function Home({ email, name, id }) {
     });
 
     if (res.ok) {
-      alert("🚫 You rejected the call");
+      // alert("🚫 You rejected the call");
+      setMessages("🚫 You rejected the call");
 
       // ✅ נקה את כל מה שצריך כדי לא להראות End Call
       setIncomingCall(null);
@@ -337,7 +342,8 @@ export default function Home({ email, name, id }) {
       stopLocalMedia();
       pendingCandidates.current = [];
     } else {
-      alert("❌ Failed to reject call");
+      // alert("❌ Failed to reject call");
+      setMessages("❌ Failed to reject call");
     }
   };
 
@@ -547,81 +553,87 @@ export default function Home({ email, name, id }) {
 
   return (
     <div>
-      <h2>Welcome, {name}</h2>
+      <header className="container-header">
+        <h2>
+          <em>Welcome {name}</em>
+        </h2>
+      </header>
 
-      <div>
-        <input
-          type="email"
-          placeholder="Enter email to call"
-          value={targetEmail}
-          onChange={(e) => setTargetEmail(e.target.value)}
-        />
-        <button
-          onClick={handleCall}
-          disabled={isDialing || isInCall || !targetEmail}
-        >
-          Call
-        </button>
+      <div className="center">
+        <main className="container-main">
+          <div className="videoCam video-left">
+            {isInCall && <VideoSelf stream={localStream.current} />}
+          </div>
+          <div className="videoCam video-right">
+            {isInCall && <VideoFriend remoteStream={remoteStream} />}
+          </div>
+        </main>
       </div>
+      <footer className="container-footer">
+        <div className=" yaron left-container">
+          <div className="nigga">
+            <select
+              value={targetEmail}
+              onChange={(e) => setTargetEmail(e.target.value)}
+            >
+              <option value="">Select user to call</option>
+              {onlineUsers
+                .filter((u) => u.email !== email)
+                .map((user) => (
+                  <option key={user.id} value={user.email}>
+                    {user.email}
+                  </option>
+                ))}
+            </select>
 
-      <div>
-        <h3>Online Users:</h3>
-        <ul>
-          {onlineUsers.map((user) => (
-            <li key={user.id}>{user.email}</li>
-          ))}
-        </ul>
-      </div>
+            <button
+              className="btn btn-left-container"
+              onClick={handleCall}
+              disabled={isDialing || isInCall || !targetEmail}
+            >
+              Call
+            </button>
+          </div>
 
-      {errorMsg && (
-        <div
-          style={{
-            background: "#fee2e2",
-            color: "#991b1b",
-            padding: "8px 12px",
-            border: "1px solid #fecaca",
-            borderRadius: 6,
-            marginBottom: 10,
-          }}
-        >
-          {errorMsg}
+          <div className="nigga">
+            <h3>Online Users: {onlineUsers.length}</h3>
+          </div>
         </div>
-      )}
 
-      <div>
-        <h3>Messages:</h3>
-        <ul>
-          {messages.map((msg, index) => (
-            <li key={index}>{JSON.stringify(msg)}</li>
-          ))}
-        </ul>
-      </div>
+        <div className="yaron right-container">
+          <div className="miki" style={{ paddingLeft: "5%" }}>
+            <p>
+              <h3>Message Box:</h3>
+              <br />
+              {messages || "There is no message yet"}
+            </p>
+          </div>
 
-      {incomingCall && (
-        <div
-          style={{ border: "1px solid black", padding: "10px", margin: "10px" }}
-        >
-          <p>
-            📞 Incoming call from <strong>{incomingCall.from}</strong>
-          </p>
-          <button onClick={handleAccept} disabled={!hasOffer}>
-            Accept
-          </button>
-          <button onClick={handleReject}>Reject</button>
+          <div className="miki" style={{ justifyContent: "center" }}>
+            {incomingCall && (
+              <div>
+                <p className="p-container">📞 Incoming call from</p>
+                <div className="center">
+                  <button className="btn accept-btn" onClick={handleAccept}>
+                    Accept
+                  </button>
+                  <button className="btn reject-btn" onClick={handleReject}>
+                    Reject
+                  </button>
+                </div>
+              </div>
+            )}
+
+            {isInCall && (
+              <button className="btn btn-end-call" onClick={endCall}>
+                End Call
+              </button>
+            )}
+
+            {errorMsg && <div className="err-box">{errorMsg}</div>}
+          </div>
         </div>
-      )}
-
-      {isInCall && (
-        <button
-          onClick={endCall}
-          style={{ backgroundColor: "red", color: "white" }}
-        >
-          End Call
-        </button>
-      )}
-
-      {isInCall && <VideoSelf stream={localStream.current} />}
-      {isInCall && <VideoFriend remoteStream={remoteStream} />}
+      </footer>
     </div>
   );
 }
