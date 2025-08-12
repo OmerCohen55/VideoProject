@@ -1,22 +1,38 @@
 import { useRef, useEffect } from "react";
 import "../styles/home.css";
+import unVideo from "../images/unVideo.jpg";
+import mute from "../images/mute-logo.jpg";
 
-export default function VideoSelf({ stream }) {
+export default function VideoSelf({ stream, isVideoOff, isMuteOn }) {
   const videoRef = useRef(null);
 
   useEffect(() => {
-    if (!videoRef.current) return;
-    if (stream) {
-      videoRef.current.srcObject = stream;
-    } else {
-      // חשוב: מנתק את הזרם מהווידאו, סוגר את האייקון בדפדפן
-      videoRef.current.srcObject = null;
+    if (videoRef.current) {
+      if (stream && !isVideoOff) {
+        // מחזיר את הווידאו ומרענן את הזרם
+        videoRef.current.srcObject = stream;
+        videoRef.current.play().catch(() => {});
+      } else if (isVideoOff) {
+        // סוגר את הווידאו ומראה תמונה
+        videoRef.current.srcObject = null;
+      }
     }
-  }, [stream]);
+  }, [stream, isVideoOff]);
 
   return (
-    <div>
-      <video ref={videoRef} autoPlay playsInline muted className="video-left" />
+    <div className="video-container">
+      {isMuteOn && <img src={mute} alt="Mute on" className="mute-img" />}
+      {isVideoOff ? (
+        <img src={unVideo} alt="Camera off" className="placeholder-img" />
+      ) : (
+        <video
+          ref={videoRef}
+          autoPlay
+          playsInline
+          muted
+          className="video-left"
+        />
+      )}
     </div>
   );
 }

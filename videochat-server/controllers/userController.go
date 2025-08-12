@@ -291,3 +291,25 @@ func GetOnlineUsers(c *gin.Context) {
 	// Responds with 200 OK and the list of online users as JSON
 	c.JSON(http.StatusOK, users)
 }
+
+// Logout - מסיר את המשתמש מרשימת המחוברים
+func Logout(c *gin.Context) {
+	type LogoutInput struct {
+		ID uint `json:"id"`
+	}
+
+	var input LogoutInput
+	if err := c.ShouldBindJSON(&input); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid request"})
+		return
+	}
+
+	// כאן אתה יכול למחוק אותו מטבלת המחוברים או לעדכן שדה "מחובר" ל-false
+	err := db.DB.Exec("DELETE FROM online_users WHERE id = ?", input.ID).Error
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to log out"})
+		return
+	}
+
+	c.JSON(http.StatusOK, gin.H{"message": "Logged out successfully"})
+}

@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from "react";
 import VideoSelf from "./VideoSelf";
 import VideoFriend from "./VideoFriend";
 import "../styles/home.css";
+import emoji from "../images/emoji.png";
 
 export default function Home({ email, name, id }) {
   const [messages, setMessages] = useState("");
@@ -16,9 +17,13 @@ export default function Home({ email, name, id }) {
   const [currentCallId, setCurrentCallId] = useState(null);
   const pendingCandidates = useRef([]); // חדש
   const incomingOffer = useRef(null);
-  const [hasOffer, setHasOffer] = useState(false);
   const [errorMsg, setErrorMsg] = useState("");
   const [isDialing, setIsDialing] = useState(false);
+  const [isMuted, setIsMuted] = useState(false);
+  const [isRemoteMuted, setIsRemoteMuted] = useState(false);
+  const [isVideoOff, setIsVideoOff] = useState(false);
+  const [isRemoteVideoOff, setIsRemoteVideoOff] = useState(false);
+  const [peerEmail, setPeerEmail] = useState("");
 
   const showError = (msg) => {
     console.error(msg);
@@ -57,13 +62,38 @@ export default function Home({ email, name, id }) {
     }, 20000);
 
     return () => clearInterval(interval);
-  }, []);
+  }, [id]);
 
-  // התחברות ל־WebSocket
+  // --- 1) refs (ליד ה-state למעלה)
+  const isInCallRef = useRef(false);
+  const isDialingRef = useRef(false);
+  const incomingCallRef = useRef(null);
+  const onlineUsersRef = useRef([]);
+  const peerEmailRef = useRef("");
+
+  // --- 2) סנכרון refs עם state
   useEffect(() => {
-    ws.current = new WebSocket(`ws://localhost:8080/ws?email=${email}`);
+    isInCallRef.current = isInCall;
+  }, [isInCall]);
+  useEffect(() => {
+    isDialingRef.current = isDialing;
+  }, [isDialing]);
+  useEffect(() => {
+    incomingCallRef.current = incomingCall;
+  }, [incomingCall]);
+  useEffect(() => {
+    onlineUsersRef.current = onlineUsers;
+  }, [onlineUsers]);
+  useEffect(() => {
+    peerEmailRef.current = peerEmail;
+  }, [peerEmail]);
 
-    ws.current.onmessage = async (event) => {
+  // --- 3) WebSocket (החלפה מלאה של ה-useEffect הישן)
+  useEffect(() => {
+    const socket = new WebSocket(`ws://localhost:8080/ws?email=${email}`);
+    ws.current = socket;
+
+    socket.onmessage = async (event) => {
       const data = JSON.parse(event.data);
       console.log("📩 WebSocket message:", data);
 
@@ -76,8 +106,7 @@ export default function Home({ email, name, id }) {
       }
 
       if (data.type === "incoming_call") {
-        // אם כבר בשיחה או מחייג — דחה אוטומטית
-        if (isInCall || isDialing) {
+        if (isInCallRef.current || isDialingRef.current) {
           try {
             await fetchWithTimeout(
               "http://localhost:8080/reject",
@@ -88,29 +117,24 @@ export default function Home({ email, name, id }) {
               },
               8000
             );
-          } catch (_) {}
-          // אפשר גם להראות הודעה קטנה:
+          } catch {}
           showError(`שיחה נכנסת מ-${data.from} נדחתה: אתה כבר בשיחה.`);
-          return; // לא נפתח מודאל קבלה
+          return;
         }
 
-        console.log("📞 Incoming call from", data.from);
         setIncomingCall({ from: data.from, callId: data.call_id });
+        return;
       }
 
       if (data.type === "call_accepted") {
-        // alert(`✅ Your call was accepted by ${data.by}`);
         setMessages(`✅ Your call was accepted by ${data.by}`);
         setIsInCall(true);
         setIsDialing(false);
-        // await startLocalStream(); // ⬅️ כאן
-        // initiateConnection();
+        return;
       }
 
       if (data.type === "call_rejected") {
-        // alert(`❌ Your call was rejected by ${data.by}`);
         setMessages(`❌ Your call was rejected by ${data.by}`);
-        // נקה את כל מה שנשאר פתוח אצל היוזם
         peerConnection.current?.close();
         peerConnection.current = null;
         setIsDialing(false);
@@ -118,10 +142,12 @@ export default function Home({ email, name, id }) {
         setIsInCall(false);
         setCurrentCallId(null);
         stopLocalMedia();
+        setIsRemoteVideoOff(false);
+        setPeerEmail("");
+        return;
       }
 
       if (data.type === "call_ended") {
-        // alert("Call has ended");
         setMessages("Call has ended");
         peerConnection.current?.close();
         peerConnection.current = null;
@@ -129,71 +155,76 @@ export default function Home({ email, name, id }) {
         setRemoteStream(null);
         setIsInCall(false);
         setIncomingCall(null);
-        setCurrentCallId(null); // ← חסר כרגע
+        setCurrentCallId(null);
         pendingCandidates.current = [];
         setIsDialing(false);
         incomingOffer.current = null;
-        setHasOffer(false);
-        setTimeout(() => {
-          setMessages(null);
-        }, 10000);
+        setTimeout(() => setMessages(null), 10000);
+        setIsRemoteVideoOff(false);
+        setPeerEmail("");
+        return;
       }
 
       if (data.type === "webrtc_offer") {
-        // קבל רק אם יש שיחה נכנסת תואמת או לא עסוקים
         if (
-          (incomingCall && incomingCall.from !== data.from) ||
-          isInCall ||
-          isDialing
+          (incomingCallRef.current &&
+            incomingCallRef.current.from !== data.from) ||
+          isInCallRef.current ||
+          isDialingRef.current
         ) {
           console.log("⚠️ Ignoring stray/late offer from", data.from);
           return;
         }
         incomingOffer.current = data;
-        setHasOffer(true);
+        return;
       }
 
       if (data.type === "webrtc_answer") {
-        await peerConnection.current.setRemoteDescription(
+        await peerConnection.current?.setRemoteDescription(
           new RTCSessionDescription(data.answer)
         );
         for (const c of pendingCandidates.current) {
-          await peerConnection.current
-            .addIceCandidate(c)
-            .catch((err) => console.error("❌ Failed to add saved ICE:", err));
+          try {
+            await peerConnection.current?.addIceCandidate(c);
+          } catch {}
         }
         pendingCandidates.current = [];
+        return;
       }
 
       if (data.type === "webrtc_ice_candidate" && data.candidate) {
-        console.log("❄️ Received ICE candidate:", data.candidate);
         const candidate = new RTCIceCandidate(data.candidate);
-
-        if (
-          peerConnection.current &&
-          peerConnection.current.remoteDescription &&
-          peerConnection.current.remoteDescription.type
-        ) {
-          peerConnection.current
-            .addIceCandidate(candidate)
-            .catch((err) =>
-              console.error("❌ Failed to add ICE candidate:", err)
-            );
+        if (peerConnection.current?.remoteDescription?.type) {
+          try {
+            await peerConnection.current.addIceCandidate(candidate);
+          } catch {}
         } else {
-          console.log("💤 ICE candidate arrived early, saving...");
           pendingCandidates.current.push(candidate);
         }
+        return;
+      }
+
+      if (data.type === "video-toggle") {
+        setIsRemoteVideoOff(Boolean(data.off));
+        return;
+      }
+
+      if (data.type === "mute-toggle") {
+        setIsRemoteMuted(Boolean(data.off));
+        return;
       }
     };
 
-    ws.current.onclose = () => {
+    socket.onclose = () => {
       console.log("WebSocket closed");
     };
 
     return () => {
-      ws.current.close();
+      try {
+        socket.close();
+      } catch {}
     };
-  }, []);
+  }, [email]);
 
   // טעינת משתמשים מחוברים
   useEffect(() => {
@@ -239,17 +270,21 @@ export default function Home({ email, name, id }) {
     } catch (err) {
       // הודעות ידידותיות
       if (err?.name === "NotAllowedError") {
-        showError("נחסמה גישה למצלמה/מיקרופון. אפשר הרשאות ונסה שוב.");
+        showError(
+          "Access to camera/microphone blocked. Allow permissions and try again"
+        );
       } else if (err?.name === "NotFoundError") {
-        showError("לא נמצאה מצלמה או מיקרופון במכשיר.");
+        showError("No camera or microphone found on the device");
       } else if (err?.name === "NotReadableError") {
         showError(
-          "התקן תפוס ע״י אפליקציה אחרת. סגור אפליקציות מצלמה/זום ונסה שוב."
+          "Device is occupied by another app. Close camera/zoom apps and try again"
         );
       } else if (err?.name === "OverconstrainedError") {
-        showError("הגדרות המצלמה/מיקרופון אינן נתמכות. נסה הגדרות אחרות.");
+        showError(
+          "Camera/microphone settings are not supported. Try other settings."
+        );
       } else {
-        showError("שגיאה בהפעלת מצלמה/מיקרופון.");
+        showError("Error activating camera/microphone");
       }
       throw err;
     }
@@ -263,6 +298,7 @@ export default function Home({ email, name, id }) {
     }
     setMessages("📞 Dialering");
     try {
+      setPeerEmail(targetEmail);
       const res = await fetchWithTimeout(
         "http://localhost:8080/call",
         {
@@ -293,7 +329,7 @@ export default function Home({ email, name, id }) {
   const handleAccept = async () => {
     if (!incomingCall) return;
     try {
-      const res = await fetchWithTimeout(
+      await fetchWithTimeout(
         "http://localhost:8080/accept",
         {
           method: "POST",
@@ -304,10 +340,10 @@ export default function Home({ email, name, id }) {
       );
 
       setCurrentCallId(incomingCall.callId);
-      // alert("✅ You accepted the call");
       setMessages("✅ You accepted the call");
       setIncomingCall(null);
       setIsInCall(true);
+      setPeerEmail(incomingCall.from);
 
       await startLocalStream();
       await handleReceivedOffer(incomingOffer.current);
@@ -338,8 +374,11 @@ export default function Home({ email, name, id }) {
       peerConnection.current = null;
 
       incomingOffer.current = null;
-      setHasOffer(false);
       stopLocalMedia();
+      setIsRemoteVideoOff(false);
+      setPeerEmail("");
+      setIsMuted(false);
+      setIsRemoteMuted(false);
       pendingCandidates.current = [];
     } else {
       // alert("❌ Failed to reject call");
@@ -357,13 +396,6 @@ export default function Home({ email, name, id }) {
       body: JSON.stringify({ call_id: currentCallId }),
     });
 
-    // שלח לצד השני שצריך לסיים
-    // ws.current.send(
-    //   JSON.stringify({
-    //     type: "call_ended",
-    //   })
-    // );
-
     // נקה את הצד שלך
     peerConnection.current?.close();
     peerConnection.current = null;
@@ -373,6 +405,57 @@ export default function Home({ email, name, id }) {
     setIncomingCall(null);
     setCurrentCallId(null);
     pendingCandidates.current = [];
+    setIsRemoteVideoOff(false);
+    setPeerEmail("");
+    setIsMuted(false);
+    setIsRemoteMuted(false);
+  };
+
+  const handleLogout = async () => {
+    // 1) עדכן שרת (אם יש endpoint להתנתקות)
+    try {
+      await fetchWithTimeout("http://localhost:8080/logout", {
+        method: "POST",
+        credentials: "include", // אם ה-JWT ב-cookie
+      });
+    } catch (_) {
+      // לא קריטי אם נכשל
+    }
+
+    // 2) אם יש שיחה פעילה — סיים אותה בצורה מסודרת
+    try {
+      if (isInCall) {
+        await endCall();
+      }
+    } catch (_) {}
+
+    // 3) סגור WebSocket אם פתוח
+    try {
+      if (ws.current && ws.current.readyState === WebSocket.OPEN) {
+        ws.current.close(1000, "user logout");
+      }
+    } catch (_) {}
+
+    // 4) ניקוי סטייט מקומי
+    try {
+      peerConnection.current?.close();
+      peerConnection.current = null;
+      stopLocalMedia();
+      setRemoteStream(null);
+      setIsInCall(false);
+      setIncomingCall(null);
+      setCurrentCallId(null);
+      setTargetEmail("");
+      setOnlineUsers([]);
+      setMessages("");
+      pendingCandidates.current = [];
+      incomingOffer.current = null;
+    } catch (_) {}
+
+    // 5) הפניה למסך התחברות/בית
+    // אם אתה משתמש ב-react-router, עדיף useNavigate:
+    // navigate("/login");
+    window.location.href = "/";
   };
 
   const initiateConnection = async () => {
@@ -523,7 +606,6 @@ export default function Home({ email, name, id }) {
       );
 
       incomingOffer.current = null;
-      setHasOffer(false);
     } catch (err) {
       console.error("❌ Error handling received offer:", err);
       cleanupConnection();
@@ -541,7 +623,10 @@ export default function Home({ email, name, id }) {
     setCurrentCallId(null);
     pendingCandidates.current = [];
     incomingOffer.current = null;
-    setHasOffer(false);
+    setIsRemoteVideoOff(false);
+    setPeerEmail("");
+    setIsMuted(false);
+    setIsRemoteMuted(false);
   };
 
   const stopLocalMedia = () => {
@@ -550,6 +635,73 @@ export default function Home({ email, name, id }) {
       localStream.current = null;
     }
   };
+
+  // בתוך Home.jsx, למעלה בתוך הקומפוננטה
+  const getPeer = () => peerEmail || incomingCall?.from || targetEmail;
+
+  const handleMute = () => {
+    const next = !isMuted;
+    setIsMuted(next);
+
+    // הפעלה/כיבוי של ה־audio track בפועל
+    if (localStream.current) {
+      localStream.current.getAudioTracks().forEach((track) => {
+        track.enabled = !next; // אם next=true → השתקה, אחרת → הפעלה
+      });
+    }
+
+    // שליחת הודעה לצד השני (אם צריך להציג UI מתאים)
+    const recipient = getPeer();
+    if (recipient && ws.current?.readyState === WebSocket.OPEN) {
+      ws.current.send(
+        JSON.stringify({
+          type: "mute-toggle",
+          to: recipient,
+          from: email,
+          off: next,
+        })
+      );
+    }
+  };
+
+  const handleVideo = () => {
+    const next = !isVideoOff;
+    setIsVideoOff(next);
+
+    // הפעלה/כיבוי של ה־track המקומי בפועל
+    if (localStream.current) {
+      localStream.current.getVideoTracks().forEach((track) => {
+        track.enabled = !next; // אם next=true → כיבוי, אחרת → הדלקה
+      });
+    }
+
+    // שליחת הודעה לצד השני
+    const recipient = getPeer();
+    if (recipient && ws.current?.readyState === WebSocket.OPEN) {
+      ws.current.send(
+        JSON.stringify({
+          type: "video-toggle",
+          to: recipient,
+          from: email,
+          off: next,
+        })
+      );
+    }
+  };
+
+  useEffect(() => {
+    if (!isVideoOff && localStream.current && peerConnection.current) {
+      localStream.current.getVideoTracks().forEach((track) => {
+        const senders = peerConnection.current.getSenders();
+        const sender = senders.find((s) => s.track && s.track.kind === "video");
+        if (sender) {
+          sender.replaceTrack(track);
+        } else {
+          peerConnection.current.addTrack(track, localStream.current);
+        }
+      });
+    }
+  }, [isVideoOff]);
 
   return (
     <div>
@@ -561,17 +713,40 @@ export default function Home({ email, name, id }) {
 
       <div className="center">
         <main className="container-main">
-          <div className="videoCam video-left">
-            {isInCall && <VideoSelf stream={localStream.current} />}
+          <div className="contain-videos">
+            <div className="videoCam circle-left">
+              {isInCall && (
+                <VideoSelf
+                  stream={localStream.current}
+                  isVideoOff={isVideoOff}
+                  isMuteOn={isMuted}
+                />
+              )}
+            </div>
+            <div className="videoCam circle-right">
+              {isInCall && (
+                <VideoFriend
+                  remoteStream={remoteStream}
+                  isVideoOff={isRemoteVideoOff}
+                  isMuteOn={isRemoteMuted}
+                />
+              )}
+            </div>
           </div>
-          <div className="videoCam video-right">
-            {isInCall && <VideoFriend remoteStream={remoteStream} />}
+          <div className="names">
+            <div className="name-order">
+              <em>{name}</em>
+            </div>
+            <div className="name-order">
+              <em>{peerEmail}</em>
+            </div>
           </div>
         </main>
       </div>
+
       <footer className="container-footer">
-        <div className=" yaron left-container">
-          <div className="nigga">
+        <div className="first left-container">
+          <div className="nigga" style={{ alignItems: "center" }}>
             <select
               value={targetEmail}
               onChange={(e) => setTargetEmail(e.target.value)}
@@ -600,7 +775,38 @@ export default function Home({ email, name, id }) {
           </div>
         </div>
 
-        <div className="yaron right-container">
+        {isInCall && (
+          <div className="second">
+            <button
+              className="second-block-btn"
+              onClick={handleMute}
+              disabled={!localStream.current}
+            >
+              {isMuted ? "Unmute" : "Mute"}
+            </button>
+            <button
+              className="second-block-btn"
+              onClick={handleVideo}
+              disabled={!localStream.current}
+            >
+              {isVideoOff ? "Open Video" : "Close Video"}
+            </button>
+          </div>
+        )}
+
+        <div className="three">
+          <img src={emoji} alt="Camera emoji" className="emoji-style" />
+        </div>
+
+        <div className="four">
+          {!isInCall && !isDialing && !incomingCall && (
+            <button className="logout-btn" onClick={handleLogout}>
+              Logout
+            </button>
+          )}
+        </div>
+
+        <div className="last right-container">
           <div className="miki" style={{ paddingLeft: "5%" }}>
             <p>
               <h3>Message Box:</h3>
@@ -612,7 +818,9 @@ export default function Home({ email, name, id }) {
           <div className="miki" style={{ justifyContent: "center" }}>
             {incomingCall && (
               <div>
-                <p className="p-container">📞 Incoming call from</p>
+                <p className="p-container">
+                  📞 Incoming call from {incomingCall.from}
+                </p>
                 <div className="center">
                   <button className="btn accept-btn" onClick={handleAccept}>
                     Accept

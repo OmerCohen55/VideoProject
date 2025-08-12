@@ -66,6 +66,10 @@ func main() {
 
 	r.GET("/online", controllers.GetOnlineUsers)
 
+	// אחרי r.POST("/login", controllers.LoginUser)
+	r.POST("/logout", controllers.Logout)
+
+
 	r.Static("/dash", "./dash")
 
 	// Starts the server and listens for incoming requests on port 8080, routing them to the defined endpoints.
