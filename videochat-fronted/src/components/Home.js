@@ -4,6 +4,35 @@ import VideoFriend from "./VideoFriend";
 import "../styles/home.css";
 import emoji from "../images/emoji.png";
 
+/** ====== SERVER CONFIG (LAN) ======
+ * Prefer configuring via .env:
+ *  - Vite:  VITE_API_HOST, VITE_API_PORT
+ *  - CRA:   REACT_APP_API_HOST, REACT_APP_API_PORT
+ * Fallback defaults to your server machine IP + 8080
+ */
+const HOST =
+  (typeof import.meta !== "undefined" &&
+    import.meta.env &&
+    import.meta.env.VITE_API_HOST) ||
+  (typeof process !== "undefined" &&
+    process.env &&
+    process.env.REACT_APP_API_HOST) ||
+  "192.168.1.178"; // ← fallback IP
+
+const PORT =
+  (typeof import.meta !== "undefined" &&
+    import.meta.env &&
+    import.meta.env.VITE_API_PORT) ||
+  (typeof process !== "undefined" &&
+    process.env &&
+    process.env.REACT_APP_API_PORT) ||
+  "8443"; // now using HTTPS default
+
+const API_BASE = `https://${HOST}:${PORT}`;
+
+const WS_URL = (email) =>
+  `wss://${HOST}:${PORT}/ws?email=${encodeURIComponent(email)}`;
+
 export default function Home({ email, name, id }) {
   const [messages, setMessages] = useState("");
   const [targetEmail, setTargetEmail] = useState("");
@@ -22,6 +51,7 @@ export default function Home({ email, name, id }) {
   const [isMuted, setIsMuted] = useState(false);
   const [isRemoteMuted, setIsRemoteMuted] = useState(false);
   const [isVideoOff, setIsVideoOff] = useState(false);
+  const [isFriendVideoOff, setIsFriendVideoOff] = useState(false);
   const [isRemoteVideoOff, setIsRemoteVideoOff] = useState(false);
   const [peerEmail, setPeerEmail] = useState("");
 
@@ -51,12 +81,12 @@ export default function Home({ email, name, id }) {
 
   // שמירה על חיבור מול השרת כל 20 שניות
   useEffect(() => {
-    fetchWithTimeout(`http://localhost:8080/keepalive?id=${id}`, {
+    fetchWithTimeout(`${API_BASE}/keepalive?id=${id}`, {
       method: "POST",
     });
 
     const interval = setInterval(() => {
-      fetchWithTimeout(`http://localhost:8080/keepalive?id=${id}`, {
+      fetchWithTimeout(`${API_BASE}/keepalive?id=${id}`, {
         method: "POST",
       });
     }, 20000);
@@ -90,8 +120,17 @@ export default function Home({ email, name, id }) {
 
   // --- 3) WebSocket (החלפה מלאה של ה-useEffect הישן)
   useEffect(() => {
-    const socket = new WebSocket(`ws://localhost:8080/ws?email=${email}`);
+    console.log("🌐 Trying to open WebSocket with email:", email);
+    const socket = new WebSocket(WS_URL(email));
     ws.current = socket;
+
+    socket.onerror = (err) => {
+      console.error("❌ WebSocket error:", err);
+    };
+
+    socket.onclose = (e) => {
+      console.warn("⚠️ WebSocket closed:", e);
+    };
 
     socket.onmessage = async (event) => {
       const data = JSON.parse(event.data);
@@ -109,7 +148,7 @@ export default function Home({ email, name, id }) {
         if (isInCallRef.current || isDialingRef.current) {
           try {
             await fetchWithTimeout(
-              "http://localhost:8080/reject",
+              `${API_BASE}/reject`,
               {
                 method: "POST",
                 headers: { "Content-Type": "application/json" },
@@ -205,12 +244,11 @@ export default function Home({ email, name, id }) {
       }
 
       if (data.type === "video-toggle") {
-        setIsRemoteVideoOff(Boolean(data.off));
-        return;
+        setIsFriendVideoOff(data.off);
       }
 
       if (data.type === "mute-toggle") {
-        setIsRemoteMuted(Boolean(data.off));
+        setIsRemoteMuted(data.off); // true = הצד השני במיוט
         return;
       }
     };
@@ -229,7 +267,7 @@ export default function Home({ email, name, id }) {
   // טעינת משתמשים מחוברים
   useEffect(() => {
     const fetchOnlineUsers = async () => {
-      const res = await fetchWithTimeout("http://localhost:8080/online");
+      const res = await fetchWithTimeout(`${API_BASE}/online`);
       const data = await res.json();
       setOnlineUsers(data);
     };
@@ -239,20 +277,6 @@ export default function Home({ email, name, id }) {
 
     return () => clearInterval(interval);
   }, []);
-
-  // קבלת הווידאו מהמיקרופון והמצלמה
-  // useEffect(() => {
-  //   navigator.mediaDevices
-  //     .getUserMedia({ video: true, audio: true })
-  //     .then((stream) => {
-  //       localStream.current = stream;
-
-  //       const video = document.getElementById("my-video");
-  //       if (video) {
-  //         video.srcObject = stream;
-  //       }
-  //     });
-  // }, []);
 
   const startLocalStream = async () => {
     try {
@@ -291,6 +315,8 @@ export default function Home({ email, name, id }) {
   };
 
   const handleCall = async () => {
+    console.log("🌐 API_BASE:", API_BASE);
+
     // בדיקה שהמשתמש מחובר
     if (!onlineUsers.some((user) => user.email === targetEmail)) {
       showError(`המשתמש ${targetEmail} אינו מחובר כרגע`);
@@ -300,7 +326,7 @@ export default function Home({ email, name, id }) {
     try {
       setPeerEmail(targetEmail);
       const res = await fetchWithTimeout(
-        "http://localhost:8080/call",
+        `${API_BASE}/call`,
         {
           method: "POST",
           headers: { "Content-Type": "application/json" },
@@ -330,7 +356,7 @@ export default function Home({ email, name, id }) {
     if (!incomingCall) return;
     try {
       await fetchWithTimeout(
-        "http://localhost:8080/accept",
+        `${API_BASE}/accept`,
         {
           method: "POST",
           headers: { "Content-Type": "application/json" },
@@ -355,14 +381,13 @@ export default function Home({ email, name, id }) {
   const handleReject = async () => {
     if (!incomingCall) return;
 
-    const res = await fetchWithTimeout("http://localhost:8080/reject", {
+    const res = await fetchWithTimeout(`${API_BASE}/reject`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ call_id: incomingCall.callId }),
     });
 
     if (res.ok) {
-      // alert("🚫 You rejected the call");
       setMessages("🚫 You rejected the call");
 
       // ✅ נקה את כל מה שצריך כדי לא להראות End Call
@@ -381,7 +406,6 @@ export default function Home({ email, name, id }) {
       setIsRemoteMuted(false);
       pendingCandidates.current = [];
     } else {
-      // alert("❌ Failed to reject call");
       setMessages("❌ Failed to reject call");
     }
   };
@@ -390,7 +414,7 @@ export default function Home({ email, name, id }) {
     console.log("📴 Ending call with ID:", currentCallId);
 
     // שלח לשרת לסיים במסד
-    await fetchWithTimeout("http://localhost:8080/end", {
+    await fetchWithTimeout(`${API_BASE}/end`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ call_id: currentCallId }),
@@ -414,7 +438,7 @@ export default function Home({ email, name, id }) {
   const handleLogout = async () => {
     // 1) עדכן שרת (אם יש endpoint להתנתקות)
     try {
-      await fetchWithTimeout("http://localhost:8080/logout", {
+      await fetchWithTimeout(`${API_BASE}/logout`, {
         method: "POST",
         credentials: "include", // אם ה-JWT ב-cookie
       });
@@ -453,8 +477,6 @@ export default function Home({ email, name, id }) {
     } catch (_) {}
 
     // 5) הפניה למסך התחברות/בית
-    // אם אתה משתמש ב-react-router, עדיף useNavigate:
-    // navigate("/login");
     window.location.href = "/";
   };
 
@@ -528,7 +550,7 @@ export default function Home({ email, name, id }) {
         })
       );
     } catch (err) {
-      showError("שגיאה ביצירת חיבור. נסה שוב."); // ← זה החידוש
+      showError("שגיאה ביצירת חיבור. נסה שוב.");
       console.error("❌ Error creating/sending offer:", err);
       cleanupConnection();
     }
@@ -727,7 +749,7 @@ export default function Home({ email, name, id }) {
               {isInCall && (
                 <VideoFriend
                   remoteStream={remoteStream}
-                  isVideoOff={isRemoteVideoOff}
+                  isVideoOff={isFriendVideoOff}
                   isMuteOn={isRemoteMuted}
                 />
               )}

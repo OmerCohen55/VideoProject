@@ -3,6 +3,23 @@ import { useState } from "react";
 import "../styles/index.css";
 import regLogo from "../images/register-logo.jpg";
 
+/** ====== SERVER CONFIG (LAN) ======
+ * Prefer configuring via .env:
+ *  - Vite:  VITE_API_HOST, VITE_API_PORT
+ *  - CRA:   REACT_APP_API_HOST, REACT_APP_API_PORT
+ * Fallback defaults to your server machine IP + 8080
+ */
+const HOST =
+  (typeof import.meta !== "undefined" &&
+    import.meta.env &&
+    import.meta.env.VITE_API_HOST) ||
+  (typeof process !== "undefined" &&
+    process.env &&
+    process.env.REACT_APP_API_HOST) ||
+  "192.168.1.178"; // ← fallback IP
+
+const API_BASE = `https://${HOST}:8443`;
+
 // Defines the Register component, receiving goToLogin as a prop
 export default function Register({ goToLogin }) {
   // Declares state variables for username, email and password with initial empty values
@@ -11,30 +28,28 @@ export default function Register({ goToLogin }) {
   const [pass, setPass] = useState("");
 
   const handleSubmit = async (e) => {
-    // Prevents the page from reloading on form submit, so the app keeps its state and we can send the data via fetch without losing user input
-    // We want to prevent the reloading because the connection to the server (WS) is closing
+    // Prevent form reload to keep SPA state (and active WS if any)
     e.preventDefault();
 
-    // We must use await because the rest of the code coudn't run without the request return a response to the server
-    // Sends a POST request to the server with the user's registration details
-    // http://localhost:8080/register - the server adress
-    // In to the res var enter the response from the server
-    const res = await fetch("http://localhost:8080/register", {
-      method: "POST", // send an information to the server
-      headers: { "Content-Type": "application/json" }, // the header request
-      // what send to the server (and its parse to json format)
-      body: JSON.stringify({ name, email, password: pass }),
-    });
+    try {
+      // Sends a POST request to the server with the user's registration details
+      const res = await fetch(`${API_BASE}/register`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        // credentials: "include", // ⟵ uncomment if server sets auth cookie
+        body: JSON.stringify({ name, email, password: pass }),
+      });
 
-    // Checks if the server response say success (status 200–299)
-    if (res.ok) {
-      // Calls the goToLogin function (prop) to navigate back to the login screen
-      goToLogin();
-      // Shows a popup message confirming successful registration
-      alert("Registered successfully");
-    } else {
-      // If the response is not successful, shows an error message to the user
-      alert("Registration failed");
+      if (res.ok) {
+        alert("Registered successfully");
+        goToLogin(); // navigate back to login
+      } else {
+        const text = await res.text().catch(() => "");
+        alert(`Registration failed${text ? `: ${text}` : ""}`);
+      }
+    } catch (err) {
+      console.error(err);
+      alert("Network error. Check server IP/port and try again.");
     }
   };
 
@@ -43,7 +58,8 @@ export default function Register({ goToLogin }) {
       <div className="container-forms">
         <img className="reg" src={regLogo} alt="reg-logo" />
         <h1>Register</h1>
-        <form onSubmit={handleSubmit}>
+
+        <form onSubmit={handleSubmit} noValidate>
           <div className="div-form">
             <label htmlFor="username">Enter Username</label>
             <input
@@ -53,8 +69,10 @@ export default function Register({ goToLogin }) {
               value={name}
               onChange={(e) => setName(e.target.value)}
               required
+              autoComplete="username"
             />
           </div>
+
           <div className="div-form">
             <label htmlFor="email">Enter Email</label>
             <input
@@ -64,8 +82,10 @@ export default function Register({ goToLogin }) {
               value={email}
               onChange={(e) => setEmail(e.target.value)}
               required
+              autoComplete="email"
             />
           </div>
+
           <div className="div-form">
             <label htmlFor="pass">Enter Password</label>
             <input
@@ -75,8 +95,11 @@ export default function Register({ goToLogin }) {
               value={pass}
               onChange={(e) => setPass(e.target.value)}
               required
+              autoComplete="new-password"
+              minLength={6}
             />
           </div>
+
           <div className="div-button">
             <button className="button-forms" type="submit">
               Submit

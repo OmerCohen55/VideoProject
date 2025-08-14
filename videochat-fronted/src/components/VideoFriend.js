@@ -8,52 +8,25 @@ export default function VideoFriend({ remoteStream, isVideoOff, isMuteOn }) {
 
   useEffect(() => {
     const video = videoRef.current;
-    if (!video) return;
-
-    if (remoteStream) {
-      video.srcObject = remoteStream;
-      console.log("🎬 VideoFriend got stream:", remoteStream);
-
-      const handleLoadedMetadata = () => {
-        video.play().catch((err) => {
-          console.error("❌ Video play error:", err);
-        });
-      };
-
-      video.addEventListener("loadedmetadata", handleLoadedMetadata);
-      return () => {
-        video.removeEventListener("loadedmetadata", handleLoadedMetadata);
-      };
+    if (!video || !remoteStream) return;
+    if (video.srcObject !== remoteStream) {
+      video.srcObject = remoteStream; // לא מאפסים לעולם
     }
   }, [remoteStream]);
 
-  useEffect(() => {
-    if (!isVideoOff && videoRef.current) {
-      videoRef.current.play().catch(() => {});
-    }
-  }, [isVideoOff]);
-
-  useEffect(() => {
-    if (!isVideoOff && remoteStream && videoRef.current) {
-      videoRef.current.srcObject = remoteStream; // ריענון חיבור
-      videoRef.current.play().catch(() => {});
-    }
-  }, [isVideoOff, remoteStream]);
-
   return (
-    <div>
-      {isMuteOn && <img src={mute} alt="Mute on" className="mute-img" />}
-      {isVideoOff ? (
+    <div className="video-container">
+      <video
+        ref={videoRef}
+        autoPlay
+        playsInline
+        className="video-right"
+        style={{ visibility: isVideoOff ? "hidden" : "visible" }}
+      />
+      {isVideoOff && (
         <img src={unVideo} alt="Camera off" className="placeholder-img" />
-      ) : (
-        <video
-          ref={videoRef}
-          autoPlay
-          playsInline
-          muted={false}
-          className="video-right"
-        />
       )}
+      {isMuteOn && <img src={mute} alt="Mute on" className="mute-img" />}
     </div>
   );
 }

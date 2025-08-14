@@ -7,31 +7,26 @@ export default function VideoSelf({ stream, isVideoOff, isMuteOn }) {
   const videoRef = useRef(null);
 
   useEffect(() => {
-    if (videoRef.current) {
-      if (stream && !isVideoOff) {
-        // מחזיר את הווידאו ומרענן את הזרם
-        videoRef.current.srcObject = stream;
-        videoRef.current.play().catch(() => {});
-      } else if (isVideoOff) {
-        // סוגר את הווידאו ומראה תמונה
-        videoRef.current.srcObject = null;
-      }
+    const v = videoRef.current;
+    if (!v || !stream) return;
+    if (v.srcObject !== stream) {
+      v.srcObject = stream; // תמיד נשאר
     }
-  }, [stream, isVideoOff]);
+  }, [stream]);
 
   return (
-    <div className="video-container">
+    <div>
       {isMuteOn && <img src={mute} alt="Mute on" className="mute-img" />}
-      {isVideoOff ? (
+      <video
+        ref={videoRef}
+        autoPlay
+        playsInline
+        muted
+        className="video-left"
+        style={{ visibility: isVideoOff ? "hidden" : "visible" }}
+      />
+      {isVideoOff && (
         <img src={unVideo} alt="Camera off" className="placeholder-img" />
-      ) : (
-        <video
-          ref={videoRef}
-          autoPlay
-          playsInline
-          muted
-          className="video-left"
-        />
       )}
     </div>
   );

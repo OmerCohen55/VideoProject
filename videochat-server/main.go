@@ -69,9 +69,9 @@ func main() {
 	// אחרי r.POST("/login", controllers.LoginUser)
 	r.POST("/logout", controllers.Logout)
 
-
-	r.Static("/dash", "./dash")
-
-	// Starts the server and listens for incoming requests on port 8080, routing them to the defined endpoints.
-	r.Run(":8080")
+	// Starts the HTTPS server on port 8443 using SSL certificate and key
+	err := r.RunTLS(":8443", "cert.pem", "key.pem")
+	if err != nil {
+		panic("❌ Failed to start HTTPS server: " + err.Error())
+	}
 }

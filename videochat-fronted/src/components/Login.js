@@ -3,6 +3,23 @@ import { useState } from "react";
 import "../styles/index.css";
 import loginLogo from "../images/login-logo.png";
 
+/** ====== SERVER CONFIG (LAN) ======
+ * Prefer configuring via .env:
+ *  - Vite:  VITE_API_HOST, VITE_API_PORT
+ *  - CRA:   REACT_APP_API_HOST, REACT_APP_API_PORT
+ * Fallback defaults to your server machine IP + 8080
+ */
+const HOST =
+  (typeof import.meta !== "undefined" &&
+    import.meta.env &&
+    import.meta.env.VITE_API_HOST) ||
+  (typeof process !== "undefined" &&
+    process.env &&
+    process.env.REACT_APP_API_HOST) ||
+  "192.168.1.178"; // ← fallback IP
+
+const API_BASE = `https://${HOST}:8443`;
+
 // Exports Login component; receives onLogin and goToRegister functions as props
 export default function Login({ onLogin, goToRegister }) {
   // Declares state variables for email and password; updates via setEmail and setPassword
@@ -14,27 +31,32 @@ export default function Login({ onLogin, goToRegister }) {
     // We want to prevent the reloading because the connection to the server (WS) is closing
     e.preventDefault();
 
-    // We must use await because the rest of the code coudn't run without the request return a response to the server
-    // Sends a POST request to the server with the user's login details
-    // http://localhost:8080/login - the server adress
-    // In to the res var enter the response from the server
-    const res = await fetch("http://localhost:8080/login", {
-      method: "POST", // send an information to the server
-      headers: { "Content-Type": "application/json" }, // the header request
-      // what send to the server (and its parse to json format)
-      body: JSON.stringify({ email, password }),
-    });
+    try {
+      // Sends a POST request to the server with the user's login details
+      // API_BASE resolves to http://<SERVER_IP>:8080
+      const res = await fetch(`${API_BASE}/login`, {
+        method: "POST", // send information to the server
+        headers: { "Content-Type": "application/json" }, // request headers
+        // what to send to the server (JSON)
+        body: JSON.stringify({ email, password }),
+        // credentials: "include", // ⟵ uncomment if your server sets an auth cookie
+      });
 
-    // If response is OK, parse JSON and call onLogin with user data; otherwise, show error alert
-    if (res.ok) {
-      const data = await res.json();
-      onLogin(email, data.name, data.id);
-    } else {
-      alert("Login failed");
+      // If response is OK, parse JSON and call onLogin with user data; otherwise, show error alert
+      if (res.ok) {
+        const data = await res.json();
+        onLogin(email, data.name, data.id);
+      } else {
+        const text = await res.text().catch(() => "");
+        alert(`Login failed${text ? `: ${text}` : ""}`);
+      }
+    } catch (err) {
+      alert("Network error. Check server IP/port and try again.");
+      console.error(err);
     }
   };
 
-  // Input field for email; updates 'email' state on change
+  // Input fields + buttons
   return (
     <div className="location">
       <div className="container-forms">
@@ -50,6 +72,7 @@ export default function Login({ onLogin, goToRegister }) {
               value={email}
               onChange={(e) => setEmail(e.target.value)}
               required
+              autoComplete="username"
             />
           </div>
 
@@ -62,6 +85,7 @@ export default function Login({ onLogin, goToRegister }) {
               value={password}
               onChange={(e) => setPassword(e.target.value)}
               required
+              autoComplete="current-password"
             />
           </div>
 

@@ -73,24 +73,29 @@ main {
   position: relative;
 }
 
-.video-left {
-  border-bottom-left-radius: 20px;
-  border-top-left-radius: 20px;
-  height: 100%;
+.video-left,
+.video-right {
   width: 100%;
+  height: 100%;
+  object-fit: cover;
+  display: block;
 }
 
-.video-right {
-  border-bottom-right-radius: 20px;
-  border-top-right-radius: 20px;
-  border-left: none;
-  height: 100%;
+.video-container {
+  position: relative;
   width: 100%;
+  height: 100%;
+  overflow: hidden;
 }
 
 .placeholder-img {
+  position: absolute;
+  inset: 0; /* top:0, right:0, bottom:0, left:0 */
   width: 100%;
-  height: 63vh;
+  height: 100%;
+  object-fit: contain; /* או cover אם אתה רוצה למלא את כל השטח */
+  background-color: black; /* שיהיה רקע אחיד */
+  z-index: 2;
 }
 
 .mute-img {
@@ -99,6 +104,18 @@ main {
   right: 0%;
   width: 15%;
   height: 20%;
+  z-index: 3;
+}
+
+.video-left {
+  border-bottom-left-radius: 20px;
+  border-top-left-radius: 20px;
+}
+
+.video-right {
+  border-bottom-right-radius: 20px;
+  border-top-right-radius: 20px;
+  border-left: none;
 }
 
 /* styling the foter */
@@ -131,6 +148,7 @@ footer {
   height: 50%;
   padding: 0.5em;
   gap: 1em;
+  margin-bottom: 5%;
 }
 
 .three {
