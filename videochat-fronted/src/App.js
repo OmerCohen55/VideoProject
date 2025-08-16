@@ -8,7 +8,7 @@ import Home from "./components/Home";
 
 // Main App component that controls which screen to show
 function App() {
-  // State to track which screen is currently shown ("login", "register", or "home")
+  // State to track which screen is currently shown ("firstPage", "login", "register", or "home")
   const [screen, setScreen] = useState("firstPage");
   // State to store the logged-in user's email, name and id
   const [email, setEmail] = useState("");
@@ -23,8 +23,7 @@ function App() {
     setScreen("home");
   };
 
-  // Return the JSX UI based on the current screen
-
+  // Return the JS UI based on the current screen
   return (
     <div>
       {screen === "firstPage" && (

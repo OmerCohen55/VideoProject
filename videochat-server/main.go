@@ -60,18 +60,21 @@ func main() {
 	// GET route: fetches all calls related to a specific email (from the database).
 	r.GET("/calls/:email", controllers.GetCallsByEmail)
 
+	// GET route: creates WS connection.
 	r.GET("/ws", func(c *gin.Context) {
 		ws.HandleWebSocket(c.Writer, c.Request)
 	})
-
+	
+	// GET route: fetches all online users (from the database).
 	r.GET("/online", controllers.GetOnlineUsers)
 
-	// אחרי r.POST("/login", controllers.LoginUser)
-	r.POST("/logout", controllers.Logout)
-
-	// Starts the HTTPS server on port 8443 using SSL certificate and key
+	// Starts the HTTPS server on port 8443 using cert.pem (certificate layer) and key.pem (private key)
+	// cert.pem: digital certificate with the server's public key and identity details
+	// key.pem: server's private key used for encryption/decryption in HTTPS
+	// Together, they enable secure communication and server authentication
 	err := r.RunTLS(":8443", "cert.pem", "key.pem")
 	if err != nil {
-		panic("❌ Failed to start HTTPS server: " + err.Error())
+		// panic - stopping immediately
+		panic("Failed to start HTTPS server: " + err.Error())
 	}
 }

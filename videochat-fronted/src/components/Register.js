@@ -3,21 +3,19 @@ import { useState } from "react";
 import "../styles/index.css";
 import regLogo from "../images/register-logo.jpg";
 
-/** ====== SERVER CONFIG (LAN) ======
- * Prefer configuring via .env:
- *  - Vite:  VITE_API_HOST, VITE_API_PORT
- *  - CRA:   REACT_APP_API_HOST, REACT_APP_API_PORT
- * Fallback defaults to your server machine IP + 8080
- */
+// ====== SERVER CONFIG (LAN) ======
+// Defines a constant HOST to store the server address
 const HOST =
+  // (used in Vite projects)
   (typeof import.meta !== "undefined" &&
     import.meta.env &&
     import.meta.env.VITE_API_HOST) ||
   (typeof process !== "undefined" &&
     process.env &&
     process.env.REACT_APP_API_HOST) ||
-  "192.168.1.178"; // ← fallback IP
+  "192.168.1.147"; // Uses default IP address 192.168.1.147 if no environment variable is found (when the server is running)
 
+// Builds the base API URL using HTTPS, the HOST value, and port 8443
 const API_BASE = `https://${HOST}:8443`;
 
 // Defines the Register component, receiving goToLogin as a prop

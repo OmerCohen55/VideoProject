@@ -4,21 +4,19 @@ import VideoFriend from "./VideoFriend";
 import "../styles/home.css";
 import emoji from "../images/emoji.png";
 
-/** ====== SERVER CONFIG (LAN) ======
- * Prefer configuring via .env:
- *  - Vite:  VITE_API_HOST, VITE_API_PORT
- *  - CRA:   REACT_APP_API_HOST, REACT_APP_API_PORT
- * Fallback defaults to your server machine IP + 8080
- */
+// ====== SERVER CONFIG (LAN) ======
+// Defines a constant HOST to store the server address
 const HOST =
+  // (used in Vite projects)
   (typeof import.meta !== "undefined" &&
     import.meta.env &&
     import.meta.env.VITE_API_HOST) ||
   (typeof process !== "undefined" &&
     process.env &&
     process.env.REACT_APP_API_HOST) ||
-  "192.168.1.178"; // ← fallback IP
+  "192.168.1.147"; // Uses default IP address 192.168.1.147 if no environment variable is found (when the server is running)
 
+// Defines a constant PORT to store the API server port
 const PORT =
   (typeof import.meta !== "undefined" &&
     import.meta.env &&
@@ -28,114 +26,192 @@ const PORT =
     process.env.REACT_APP_API_PORT) ||
   "8443"; // now using HTTPS default
 
+// Builds the base API URL using HTTPS, the resolved HOST, and the resolved PORT
 const API_BASE = `https://${HOST}:${PORT}`;
 
+// Defines an arrow function WS_URL that takes an email and returns a WebSocket URL
 const WS_URL = (email) =>
   `wss://${HOST}:${PORT}/ws?email=${encodeURIComponent(email)}`;
 
 export default function Home({ email, name, id }) {
+  // Stores the message text shown to the user
   const [messages, setMessages] = useState("");
+
+  // Stores the email of the user you want to call
   const [targetEmail, setTargetEmail] = useState("");
+
+  // Holds the list of online users fetched from the server
   const [onlineUsers, setOnlineUsers] = useState([]);
+
+  // Reference to the active WebSocket connection
+  // useRef creates a constant container (ws.current) that holds the active WebSocket instance without triggering re-renders when updated
   const ws = useRef(null);
+
+  // Holds data about an incoming call (caller email and call ID)
   const [incomingCall, setIncomingCall] = useState(null);
+
+  // Saya if the current user is in a call
   const [isInCall, setIsInCall] = useState(false);
+
+  // Stores the MediaStream from the remote peer. triggers re-render to display it in the UI
+  // remoteStream: the peer's media stream (camera + microphone) received by you
   const [remoteStream, setRemoteStream] = useState(null);
+
+  // Reference to the local MediaStream (camera + microphone)
+  // localStream: your media stream (camera + microphone) sent to the peer
   const localStream = useRef(null);
+
+  // Reference to the RTCPeerConnection object used for WebRTC
+  // WebRTC - Web Real-Time Communication (lives, games)
   const peerConnection = useRef(null);
+
+  // Stores the current call's unique ID
   const [currentCallId, setCurrentCallId] = useState(null);
-  const pendingCandidates = useRef([]); // חדש
+
+  // Holds ICE candidates received before peer connection is ready
+  // Temporary storage for RTCIceCandidate objects (connection details like IP/port) received before the PeerConnection is ready to use them
+  const pendingCandidates = useRef([]);
+
+  // Stores the offer received from a remote peer before accepting
   const incomingOffer = useRef(null);
+
+  // Stores the latest error message to display
   const [errorMsg, setErrorMsg] = useState("");
+
+  // Says if the current user is dialing (calling)
   const [isDialing, setIsDialing] = useState(false);
+
+  // Says if the local microphone is muted
   const [isMuted, setIsMuted] = useState(false);
+
+  // Says if the remote peer's microphone is muted
   const [isRemoteMuted, setIsRemoteMuted] = useState(false);
+
+  // Says if the local video camera is turned off
   const [isVideoOff, setIsVideoOff] = useState(false);
+
+  // Says if the remote peer's video camera is turned off
   const [isFriendVideoOff, setIsFriendVideoOff] = useState(false);
-  const [isRemoteVideoOff, setIsRemoteVideoOff] = useState(false);
+
+  // Stores the email of the peer currently connected in the call
   const [peerEmail, setPeerEmail] = useState("");
 
+  // Holds a flag indicating if the user is currently in a call
+  const isInCallRef = useRef(false);
+
+  // Holds a flag indicating if the user is currently dialing someone
+  const isDialingRef = useRef(false);
+
+  // Stores details of the incoming call, or null if there is none
+  const incomingCallRef = useRef(null);
+
+  // Keeps the current list of online users without causing re-renders
+  const onlineUsersRef = useRef([]);
+
+  // Stores the email of the peer currently connected or being called
+  const peerEmailRef = useRef("");
+
+  // Helper function that receives an error message and shows it temporarily in the UI
   const showError = (msg) => {
     console.error(msg);
     setErrorMsg(msg);
-    setTimeout(() => setErrorMsg(""), 10000); // נעל אחרי 5 שניות
+    // Clears the error message after 10,000 ms (10 seconds) — note: comment says 5s but code uses 10s
+    setTimeout(() => setErrorMsg(""), 10000);
   };
 
-  // fetch עם timeout בסיסי
+  // Async function that performs a fetch request with a timeout (default 8 seconds)
   const fetchWithTimeout = async (url, options = {}, timeoutMs = 8000) => {
+    // Creates an AbortController to cancel the request if timeout is reached
     const ctrl = new AbortController();
+    // Sets a timer to abort the request if timeoutMs is exceeded
     const id = setTimeout(() => ctrl.abort(), timeoutMs);
     try {
+      // Attempts to fetch the given URL with options, passing the abort signal for cancellation
       const res = await fetch(url, { ...options, signal: ctrl.signal });
+      // Clears the timeout if the request completes before the limit
       clearTimeout(id);
+      // If response is not OK, read the text (if possible) and throw an error with status and details
       if (!res.ok) {
         const text = await res.text().catch(() => "");
-        throw new Error(`HTTP ${res.status} – ${text || url}`);
+        throw new Error(`HTTP ${res.status} ${text || url}`);
       }
       return res;
     } catch (e) {
+      // On error (including timeout), clear the timer and rethrow the error
       clearTimeout(id);
       throw e;
     }
   };
 
-  // שמירה על חיבור מול השרת כל 20 שניות
+  // Runs code to keep the server informed that the user is still connected by sending periodic keepalive requests
   useEffect(() => {
+    // Sends a POST request to /keepalive with the user's ID when the component first mounts
     fetchWithTimeout(`${API_BASE}/keepalive?id=${id}`, {
       method: "POST",
     });
 
+    // Sets an interval to send the same keepalive request every 20 seconds
     const interval = setInterval(() => {
       fetchWithTimeout(`${API_BASE}/keepalive?id=${id}`, {
         method: "POST",
       });
     }, 20000);
 
+    // Cleanup function: stops the interval when the component unmounts or dependencies change
     return () => clearInterval(interval);
   }, [id]);
 
-  // --- 1) refs (ליד ה-state למעלה)
-  const isInCallRef = useRef(false);
-  const isDialingRef = useRef(false);
-  const incomingCallRef = useRef(null);
-  const onlineUsersRef = useRef([]);
-  const peerEmailRef = useRef("");
-
-  // --- 2) סנכרון refs עם state
+  // Syncs isInCall state into isInCallRef so async callbacks can read the latest value without triggering re-renders
   useEffect(() => {
     isInCallRef.current = isInCall;
   }, [isInCall]);
+
+  // Updates isDialingRef whenever isDialing changes so listeners always see the latest dialing state
   useEffect(() => {
     isDialingRef.current = isDialing;
   }, [isDialing]);
+
+  // Mirrors the latest incoming call object into a ref without causing re-renders
   useEffect(() => {
     incomingCallRef.current = incomingCall;
   }, [incomingCall]);
+
+  // Keeps a ref copy of the online users list for use in timers/listeners without stale state
   useEffect(() => {
     onlineUsersRef.current = onlineUsers;
   }, [onlineUsers]);
+
+  // Syncs the current peer email into a ref for immediate use in callbacks without re-rendering
   useEffect(() => {
     peerEmailRef.current = peerEmail;
   }, [peerEmail]);
 
-  // --- 3) WebSocket (החלפה מלאה של ה-useEffect הישן)
+  // useEffect to initialize WebSocket connection when 'email' changes
   useEffect(() => {
-    console.log("🌐 Trying to open WebSocket with email:", email);
+    // Log the attempt to open WebSocket
+    console.log("Trying to open WebSocket with email:", email);
+
+    // Create new WebSocket connection to server using user's email
     const socket = new WebSocket(WS_URL(email));
     ws.current = socket;
 
+    // Handle WebSocket connection errors
     socket.onerror = (err) => {
-      console.error("❌ WebSocket error:", err);
+      console.error("WebSocket error:", err);
     };
 
+    // Log when WebSocket connection closes
     socket.onclose = (e) => {
-      console.warn("⚠️ WebSocket closed:", e);
+      console.warn("WebSocket closed:", e);
     };
 
+    // Handle incoming WebSocket messages
     socket.onmessage = async (event) => {
+      // Parse incoming JSON message
       const data = JSON.parse(event.data);
-      console.log("📩 WebSocket message:", data);
+      console.log("WebSocket message:", data);
 
+      // Clear messages unless it's a WebRTC message
       if (
         data.type !== "webrtc_offer" &&
         data.type !== "webrtc_answer" &&
@@ -144,7 +220,9 @@ export default function Home({ email, name, id }) {
         setMessages("");
       }
 
+      // Handle incoming call request
       if (data.type === "incoming_call") {
+        // If already in a call or dialing, reject the new call
         if (isInCallRef.current || isDialingRef.current) {
           try {
             await fetchWithTimeout(
@@ -157,23 +235,28 @@ export default function Home({ email, name, id }) {
               8000
             );
           } catch {}
-          showError(`שיחה נכנסת מ-${data.from} נדחתה: אתה כבר בשיחה.`);
+          showError(
+            `Incoming call from ${data.from} was rejected: you are already in a call.`
+          );
           return;
         }
 
+        // Store incoming call details
         setIncomingCall({ from: data.from, callId: data.call_id });
         return;
       }
 
+      // Handle case when outgoing call is accepted
       if (data.type === "call_accepted") {
-        setMessages(`✅ Your call was accepted by ${data.by}`);
+        setMessages(`Your call was accepted by ${data.by}`);
         setIsInCall(true);
         setIsDialing(false);
         return;
       }
 
+      // Handle case when outgoing call is rejected
       if (data.type === "call_rejected") {
-        setMessages(`❌ Your call was rejected by ${data.by}`);
+        setMessages(`Your call was rejected by ${data.by}`);
         peerConnection.current?.close();
         peerConnection.current = null;
         setIsDialing(false);
@@ -181,11 +264,11 @@ export default function Home({ email, name, id }) {
         setIsInCall(false);
         setCurrentCallId(null);
         stopLocalMedia();
-        setIsRemoteVideoOff(false);
         setPeerEmail("");
         return;
       }
 
+      // Handle call ended by the other user
       if (data.type === "call_ended") {
         setMessages("Call has ended");
         peerConnection.current?.close();
@@ -199,82 +282,108 @@ export default function Home({ email, name, id }) {
         setIsDialing(false);
         incomingOffer.current = null;
         setTimeout(() => setMessages(null), 10000);
-        setIsRemoteVideoOff(false);
         setPeerEmail("");
         return;
       }
 
+      // Handle incoming WebRTC offer
       if (data.type === "webrtc_offer") {
+        // Ignore offer if user is busy or offer is from a different caller
         if (
           (incomingCallRef.current &&
             incomingCallRef.current.from !== data.from) ||
           isInCallRef.current ||
           isDialingRef.current
         ) {
-          console.log("⚠️ Ignoring stray/late offer from", data.from);
+          console.log("Ignoring stray/late offer from", data.from);
           return;
         }
+
+        // Save offer for later use (when accepting call)
         incomingOffer.current = data;
         return;
       }
 
+      // Handle WebRTC answer to a previously sent offer
       if (data.type === "webrtc_answer") {
         await peerConnection.current?.setRemoteDescription(
           new RTCSessionDescription(data.answer)
         );
+
+        // Apply any buffered ICE candidates
         for (const c of pendingCandidates.current) {
           try {
             await peerConnection.current?.addIceCandidate(c);
           } catch {}
         }
+
+        // Clear the candidate buffer
         pendingCandidates.current = [];
         return;
       }
 
+      // Handle new incoming ICE candidate
       if (data.type === "webrtc_ice_candidate" && data.candidate) {
         const candidate = new RTCIceCandidate(data.candidate);
+
+        // If remote description is set, apply candidate
         if (peerConnection.current?.remoteDescription?.type) {
           try {
             await peerConnection.current.addIceCandidate(candidate);
           } catch {}
         } else {
+          // Otherwise, buffer it for later
           pendingCandidates.current.push(candidate);
         }
         return;
       }
 
+      // Handle video on/off toggle from other user
       if (data.type === "video-toggle") {
         setIsFriendVideoOff(data.off);
       }
 
+      // Handle mute/unmute toggle from other user
       if (data.type === "mute-toggle") {
-        setIsRemoteMuted(data.off); // true = הצד השני במיוט
+        setIsRemoteMuted(data.off); // true = other side is muted
         return;
       }
     };
 
+    // Handle WebSocket close (duplicate safeguard)
     socket.onclose = () => {
       console.log("WebSocket closed");
     };
 
+    // Cleanup function: close socket when component unmounts
     return () => {
       try {
         socket.close();
       } catch {}
     };
-  }, [email]);
+  }, [email]); // Rerun effect if 'email' changes
 
-  // טעינת משתמשים מחוברים
+  // useEffect to periodically fetch the list of online users from the server
   useEffect(() => {
+    // Define async function to fetch current online users
     const fetchOnlineUsers = async () => {
+      // Send GET request to /online endpoint with timeout
       const res = await fetchWithTimeout(`${API_BASE}/online`);
+
+      // Parse JSON response
       const data = await res.json();
+
+      // Update the state with the list of online users
       setOnlineUsers(data);
     };
 
+    // Call the function immediately when component mounts
     fetchOnlineUsers();
+
+    // Set interval to fetch online users every 5 seconds
     const interval = setInterval(fetchOnlineUsers, 5000);
 
+    // Clear the interval when component unmounts
     return () => clearInterval(interval);
   }, []);
 
@@ -315,7 +424,7 @@ export default function Home({ email, name, id }) {
   };
 
   const handleCall = async () => {
-    console.log("🌐 API_BASE:", API_BASE);
+    console.log("API_BASE:", API_BASE);
 
     // בדיקה שהמשתמש מחובר
     if (!onlineUsers.some((user) => user.email === targetEmail)) {
@@ -400,7 +509,6 @@ export default function Home({ email, name, id }) {
 
       incomingOffer.current = null;
       stopLocalMedia();
-      setIsRemoteVideoOff(false);
       setPeerEmail("");
       setIsMuted(false);
       setIsRemoteMuted(false);
@@ -411,7 +519,7 @@ export default function Home({ email, name, id }) {
   };
 
   const endCall = async () => {
-    console.log("📴 Ending call with ID:", currentCallId);
+    console.log("Ending call with ID:", currentCallId);
 
     // שלח לשרת לסיים במסד
     await fetchWithTimeout(`${API_BASE}/end`, {
@@ -429,7 +537,6 @@ export default function Home({ email, name, id }) {
     setIncomingCall(null);
     setCurrentCallId(null);
     pendingCandidates.current = [];
-    setIsRemoteVideoOff(false);
     setPeerEmail("");
     setIsMuted(false);
     setIsRemoteMuted(false);
@@ -482,19 +589,18 @@ export default function Home({ email, name, id }) {
 
   const initiateConnection = async () => {
     if (peerConnection.current) {
-      console.warn("🛑 peerConnection already exists, skipping re-init");
+      console.warn("peerConnection already exists, skipping re-init");
       return;
     }
 
-    // 🛡 בדיקה קריטית: האם ה־stream קיים ומוכן?
     if (!localStream.current || localStream.current.getTracks().length === 0) {
       console.error(
-        "⛔ Cannot initiate connection: local stream is missing or empty"
+        "Cannot initiate connection: local stream is missing or empty"
       );
       return;
     }
 
-    console.log("📡 Sending local tracks:", localStream.current.getTracks());
+    console.log("Sending local tracks:", localStream.current.getTracks());
 
     // יצירת החיבור
     peerConnection.current = new RTCPeerConnection({
@@ -516,7 +622,7 @@ export default function Home({ email, name, id }) {
 
     // קבלת stream מהצד השני
     peerConnection.current.ontrack = (event) => {
-      console.log("🎥 Got remote track!", event.streams);
+      console.log("Got remote track!", event.streams);
       setRemoteStream(event.streams[0]);
     };
 
@@ -524,7 +630,7 @@ export default function Home({ email, name, id }) {
     peerConnection.current.onicecandidate = (event) => {
       if (event.candidate) {
         const recipient = targetEmail || incomingCall?.from;
-        console.log("📤 Sending ICE candidate", event.candidate);
+        console.log("Sending ICE candidate", event.candidate);
         ws.current.send(
           JSON.stringify({
             type: "webrtc_ice_candidate",
@@ -551,18 +657,18 @@ export default function Home({ email, name, id }) {
       );
     } catch (err) {
       showError("שגיאה ביצירת חיבור. נסה שוב.");
-      console.error("❌ Error creating/sending offer:", err);
+      console.error("Error creating/sending offer:", err);
       cleanupConnection();
     }
   };
 
   const handleReceivedOffer = async (data) => {
-    console.log("📡 Received offer:", data.offer);
+    console.log("Received offer:", data.offer);
 
     await startLocalStream();
 
     if (peerConnection.current) {
-      console.warn("🛑 peerConnection already exists, skipping re-init");
+      console.warn("peerConnection already exists, skipping re-init");
       return;
     }
 
@@ -580,7 +686,7 @@ export default function Home({ email, name, id }) {
     peerConnection.current.onicecandidate = (event) => {
       if (event.candidate) {
         const recipient = data.from || incomingCall?.from || targetEmail;
-        console.log("📤 Sending ICE candidate", event.candidate);
+        console.log("Sending ICE candidate", event.candidate);
         ws.current.send(
           JSON.stringify({
             type: "webrtc_ice_candidate",
@@ -593,7 +699,7 @@ export default function Home({ email, name, id }) {
     };
 
     peerConnection.current.ontrack = (event) => {
-      console.log("🎥 Got remote track!", event.streams);
+      console.log("Got remote track!", event.streams);
       setRemoteStream(event.streams[0]);
     };
 
@@ -629,7 +735,7 @@ export default function Home({ email, name, id }) {
 
       incomingOffer.current = null;
     } catch (err) {
-      console.error("❌ Error handling received offer:", err);
+      console.error("Error handling received offer:", err);
       cleanupConnection();
     }
   };
@@ -645,7 +751,6 @@ export default function Home({ email, name, id }) {
     setCurrentCallId(null);
     pendingCandidates.current = [];
     incomingOffer.current = null;
-    setIsRemoteVideoOff(false);
     setPeerEmail("");
     setIsMuted(false);
     setIsRemoteMuted(false);
@@ -658,7 +763,6 @@ export default function Home({ email, name, id }) {
     }
   };
 
-  // בתוך Home.jsx, למעלה בתוך הקומפוננטה
   const getPeer = () => peerEmail || incomingCall?.from || targetEmail;
 
   const handleMute = () => {

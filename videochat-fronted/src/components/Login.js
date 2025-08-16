@@ -1,23 +1,23 @@
 // Imports useState from React to handle dynamic state updates
 import { useState } from "react";
+// index.css its the css file of the login page
 import "../styles/index.css";
+// Importing the login image from the "images" folder
 import loginLogo from "../images/login-logo.png";
 
-/** ====== SERVER CONFIG (LAN) ======
- * Prefer configuring via .env:
- *  - Vite:  VITE_API_HOST, VITE_API_PORT
- *  - CRA:   REACT_APP_API_HOST, REACT_APP_API_PORT
- * Fallback defaults to your server machine IP + 8080
- */
+// ====== SERVER CONFIG (LAN) ======
+// Defines a constant HOST to store the server address
 const HOST =
+  // (used in Vite projects)
   (typeof import.meta !== "undefined" &&
     import.meta.env &&
     import.meta.env.VITE_API_HOST) ||
   (typeof process !== "undefined" &&
     process.env &&
     process.env.REACT_APP_API_HOST) ||
-  "192.168.1.178"; // ← fallback IP
+  "192.168.1.147"; // Uses default IP address 192.168.1.147 if no environment variable is found (when the server is running)
 
+// Builds the base API URL using HTTPS, the HOST value, and port 8443
 const API_BASE = `https://${HOST}:8443`;
 
 // Exports Login component; receives onLogin and goToRegister functions as props
@@ -39,7 +39,7 @@ export default function Login({ onLogin, goToRegister }) {
         headers: { "Content-Type": "application/json" }, // request headers
         // what to send to the server (JSON)
         body: JSON.stringify({ email, password }),
-        // credentials: "include", // ⟵ uncomment if your server sets an auth cookie
+        // credentials: "include", // uncomment if your server sets an auth cookie
       });
 
       // If response is OK, parse JSON and call onLogin with user data; otherwise, show error alert
